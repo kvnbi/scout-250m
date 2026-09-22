@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -7,6 +7,7 @@ name = "scout"
 version = "0.0.1"
 description = "Scout 250M: a small language model built to research"
 requires-python = ">=3.11"
+license = "Apache-2.0"
 dependencies = [
     "torch>=2.5",
     "numpy>=1.26",
