@@ -63,6 +63,22 @@ def test_rmsnorm_preserves_bfloat16():
     torch.testing.assert_close(y.double(), expected, rtol=1e-2, atol=1e-2)
 
 
+def qwen3_rmsnorm(x, weight, eps):
+    h = x.to(torch.float32)
+    h = h * torch.rsqrt(h.pow(2).mean(-1, keepdim=True) + eps)
+    return weight * h.to(x.dtype)
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
+def test_rmsnorm_matches_qwen3_exactly(dtype):
+    torch.manual_seed(8)
+    norm = RMSNorm(896).to(dtype)
+    with torch.no_grad():
+        norm.weight.copy_(torch.randn(896))
+    x = torch.randn(2, 8, 896).to(dtype)
+    assert torch.equal(norm(x), qwen3_rmsnorm(x, norm.weight, norm.eps))
+
+
 def test_rmsnorm_keeps_float64_precision():
     torch.manual_seed(6)
     norm = RMSNorm(64).double()

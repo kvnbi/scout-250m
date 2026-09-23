@@ -22,7 +22,7 @@ class RMSNorm(nn.Module):
             raise ValueError(f"expected last dimension {self.dim}, got {x.shape[-1]}")
         h = x.to(torch.promote_types(x.dtype, torch.float32))
         h = h * torch.rsqrt(h.pow(2).mean(dim=-1, keepdim=True) + self.eps)
-        return (h * self.weight.to(h.dtype)).to(x.dtype)
+        return self.weight.to(x.dtype) * h.to(x.dtype)
 
     def extra_repr(self) -> str:
         return f"{self.dim}, eps={self.eps}"
