@@ -116,16 +116,15 @@ def test_query_heads_share_kv_heads_in_contiguous_groups():
     assert attention(torch.randn(1, 6, 896, dtype=torch.float64), cos, sin).abs().max() == 0
 
 
-def test_bfloat16_close_to_float32():
-    attention = make()
+@pytest.mark.parametrize("seed", range(5))
+def test_bfloat16_error_stays_within_rounding(seed):
+    attention = make(seed=seed)
     x = torch.randn(2, 32, 896)
-    cos, sin = cos_sin(2, 32)
-    expected = attention(x, cos, sin)
+    expected = attention.double()(x.double(), *cos_sin(2, 32, torch.float64))
     low = attention.to(torch.bfloat16)
-    cos16, sin16 = cos_sin(2, 32, torch.bfloat16)
-    y = low(x.bfloat16(), cos16, sin16)
+    y = low(x.bfloat16(), *cos_sin(2, 32, torch.bfloat16))
     assert y.dtype == torch.bfloat16
-    torch.testing.assert_close(y.float(), expected, rtol=0.1, atol=0.05)
+    torch.testing.assert_close(y.double(), expected, rtol=0.0, atol=0.02)
 
 
 def test_gradients_are_finite():
