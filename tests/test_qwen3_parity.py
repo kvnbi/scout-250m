@@ -43,3 +43,31 @@ def test_rotary_matches_transformers(dtype):
     assert torch.equal(our_sin, their_sin)
     assert torch.equal(apply_rotary(q, our_cos, our_sin), their_q)
     assert torch.equal(apply_rotary(k, our_cos, our_sin), their_k)
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
+@pytest.mark.parametrize("n_kv_heads", [2, 7])
+def test_attention_matches_transformers(dtype, n_kv_heads):
+    from scout.attention import Attention
+
+    torch.manual_seed(2)
+    config = Qwen3Config(
+        hidden_size=896,
+        num_attention_heads=14,
+        num_key_value_heads=n_kv_heads,
+        head_dim=64,
+        rope_parameters={"rope_type": "default", "rope_theta": 10000.0},
+    )
+    config._attn_implementation = "sdpa"
+    ours = Attention(896, 14, n_kv_heads, 64).to(dtype)
+    with torch.no_grad():
+        ours.q_norm.weight.copy_(1.0 + 0.1 * torch.randn(64))
+        ours.k_norm.weight.copy_(1.0 + 0.1 * torch.randn(64))
+    theirs = qwen3.Qwen3Attention(config, layer_idx=0).to(dtype)
+    theirs.load_state_dict(ours.state_dict())
+    positions = torch.arange(256).repeat(2, 1)
+    x = torch.randn(2, 256, 896).to(dtype)
+    cos, sin = RotaryEmbedding(64)(positions, dtype)
+    their_out, _ = theirs(x, (cos, sin), attention_mask=None)
+    tolerance = {torch.float32: 1e-5, torch.bfloat16: 1e-2}[dtype]
+    torch.testing.assert_close(ours(x, cos, sin), their_out, rtol=tolerance, atol=tolerance)
