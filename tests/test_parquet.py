@@ -31,6 +31,17 @@ def test_rejects_missing_columns(tmp_path):
         list(iter_parquet(path, ("text", "id")))
 
 
+def test_text_column_can_be_renamed_or_unchecked(tmp_path):
+    path = write(tmp_path / "f.parquet", {"body": ["a", None], "id": ["1", "2"]})
+    rows = iter_parquet(path, ("body", "id"), text_column="body")
+    assert next(rows)["body"] == "a"
+    with pytest.raises(ValueError):
+        next(rows)
+    assert [row["id"] for row in iter_parquet(path, ("body", "id"), text_column=None)] == ["1", "2"]
+    with pytest.raises(ValueError):
+        list(iter_parquet(path, ("id",), text_column="body"))
+
+
 def test_rejects_rows_without_text(tmp_path):
     path = write(tmp_path / "f.parquet", {"text": ["a", None], "id": ["1", "2"]})
     rows = iter_parquet(path, ("text", "id"))
