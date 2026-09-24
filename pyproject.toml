@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "scout"
 version = "0.0.1"
 description = "Scout 250M: a small language model built to research"
-requires-python = ">=3.11"
+requires-python = ">=3.14"
 license = "Apache-2.0"
 dependencies = [
     "torch>=2.5",
