@@ -11,6 +11,7 @@ license = "Apache-2.0"
 dependencies = [
     "torch>=2.5",
     "numpy>=1.26",
+    "pyarrow>=25",
 ]
 
 [project.optional-dependencies]
