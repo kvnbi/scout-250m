@@ -160,6 +160,10 @@ def test_default_config_is_used_when_none_given(full_model):
     assert full_model.config == ModelConfig()
 
 
+def test_default_rope_base_reaches_the_model(full_model):
+    assert full_model.model.rotary_emb.base == 100000.0
+
+
 def test_bfloat16_runs_and_stays_finite():
     logits = make().to(torch.bfloat16)(tokens(2, 16))
     assert logits.dtype == torch.bfloat16

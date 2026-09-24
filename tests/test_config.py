@@ -33,7 +33,7 @@ def test_rejects_mismatched_heads():
 def test_norm_and_rope_defaults():
     config = ModelConfig()
     assert config.norm_eps == 1e-6
-    assert config.rope_theta == 10000.0
+    assert config.rope_theta == 100000.0
     assert config.init_std == 0.02
     assert config.depth_scaled_init is True
 
@@ -70,7 +70,7 @@ def test_qwen3_config_fields():
         "hidden_act": "silu",
         "max_position_embeddings": 2048,
         "rms_norm_eps": 1e-6,
-        "rope_theta": 10000.0,
+        "rope_theta": 100000.0,
         "initializer_range": 0.02,
         "tie_word_embeddings": True,
         "attention_bias": False,

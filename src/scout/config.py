@@ -17,7 +17,7 @@ class ModelConfig:
     tie_embeddings: bool = True
     qk_norm: bool = True
     norm_eps: float = 1e-6
-    rope_theta: float = 10000.0
+    rope_theta: float = 100000.0
     init_std: float = 0.02
     depth_scaled_init: bool = True
 

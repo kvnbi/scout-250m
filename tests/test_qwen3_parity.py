@@ -153,6 +153,7 @@ def test_loss_matches_transformers():
     ours = Scout(config)
     their_config = Qwen3Config(**config.qwen3_config())
     their_config._attn_implementation = "sdpa"
+    assert their_config.rope_parameters["rope_theta"] == config.rope_theta == 100000.0
     theirs = transformers.AutoModelForCausalLM.from_config(their_config, dtype=torch.float32)
     theirs.load_state_dict(ours.state_dict())
     ids = torch.randint(0, 2048, (2, 64))
