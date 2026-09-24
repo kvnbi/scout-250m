@@ -2,23 +2,19 @@ from __future__ import annotations
 
 import argparse
 import gzip
-import hashlib
-import http.client
 import io
 import json
 import random
 import re
-import shutil
 import sys
-import time
-import urllib.error
-import urllib.request
 from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import BinaryIO
 
 from compression import zstd
+
+from scout.data.fetch import download_with_retries, sha256_of
 
 BASE_URL = "https://data.commoncrawl.org/"
 PREFIX = "contrib/Nemotron/Nemotron-CC/data-jsonl/"
@@ -36,8 +32,6 @@ _PATH = re.compile(
     r"^contrib/Nemotron/Nemotron-CC/data-jsonl/quality=(?P<quality>[a-z-]+)/kind=(?P<kind>actual|synthetic)/"
     r"kind2=(?P<kind2>[a-z_]+)/(?P<crawl>CC-MAIN-\d{4}-\d{2})-part-(?P<part>\d{5})\.jsonl\.zstd$"
 )
-_CONTENT_RANGE = re.compile(r"^bytes (\d+)-(\d+)/(\d+)$")
-_UNSATISFIED_RANGE = re.compile(r"^bytes \*/(\d+)$")
 
 
 @dataclass(frozen=True)
@@ -108,59 +102,6 @@ def iter_records(stream: BinaryIO) -> Iterator[dict[str, str]]:
             yield {"text": text, "url": record.get("url") or "", "id": record.get("warc_record_id") or ""}
 
 
-def download(url: str, destination: Path, timeout: float = 60.0) -> Path:
-    if destination.exists():
-        return destination
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    partial = destination.with_name(destination.name + ".part")
-    start = partial.stat().st_size if partial.exists() else 0
-    headers = {"Range": f"bytes={start}-"} if start else {}
-    try:
-        response = urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=timeout)
-    except urllib.error.HTTPError as error:
-        match = _UNSATISFIED_RANGE.match(error.headers.get("Content-Range", ""))
-        if error.code != 416 or match is None:
-            raise
-        if start != int(match[1]):
-            partial.unlink()
-            raise OSError(f"{partial} did not match the {match[1]} byte file, rerun to download afresh") from error
-        partial.replace(destination)
-        return destination
-    with response:
-        content_range = response.headers.get("Content-Range", "")
-        if start and response.status == 206:
-            match = _CONTENT_RANGE.match(content_range)
-            if match is None or int(match[1]) != start:
-                raise OSError(f"unexpected Content-Range {content_range!r} for {url}")
-            total = int(match[3])
-        else:
-            start = 0
-            length = response.headers.get("Content-Length")
-            total = int(length) if length is not None else None
-        with open(partial, "ab" if start else "wb") as out:
-            try:
-                shutil.copyfileobj(response, out, 1 << 20)
-            except http.client.IncompleteRead as error:
-                raise OSError(f"{url} was cut off, rerun to resume") from error
-    size = partial.stat().st_size
-    if total is not None and size != total:
-        raise OSError(f"{url} stopped at {size} of {total} bytes, rerun to resume")
-    partial.replace(destination)
-    return destination
-
-
-def download_with_retries(url: str, destination: Path, retries: int, wait: float) -> Path:
-    for attempt in range(retries):
-        try:
-            return download(url, destination)
-        except OSError as error:
-            if isinstance(error, urllib.error.HTTPError) and error.code < 500 and error.code not in (408, 429):
-                raise
-            print(f"retrying {url} after: {error}", file=sys.stderr, flush=True)
-            time.sleep(wait * 2**attempt)
-    return download(url, destination)
-
-
 def parse_partitions(text: str) -> list[tuple[str, str]]:
     partitions = []
     for item in text.split(","):
@@ -193,7 +134,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "partitions": args.partitions,
         "files_per_partition": args.files_per_partition,
         "seed": args.seed,
-        "manifest_sha256": hashlib.sha256(manifest.read_bytes()).hexdigest(),
+        "manifest_sha256": sha256_of(manifest),
         "files": [f.path for f in chosen],
     }
     (args.out / "selection.json").write_text(json.dumps(selection, indent=2) + "\n", encoding="utf-8")

@@ -2,8 +2,6 @@ import gzip
 import hashlib
 import io
 import json
-import threading
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 from compression import zstd
@@ -11,8 +9,6 @@ from compression import zstd
 from scout.data.nemotron import (
     DEFAULT_PARTITIONS,
     MANIFEST_PATH,
-    download,
-    download_with_retries,
     iter_records,
     main,
     parse_manifest,
@@ -158,164 +154,6 @@ def test_skips_blank_lines_and_rejects_records_without_text():
     assert next(stream)["text"] == "ok"
     with pytest.raises(ValueError):
         next(stream)
-
-
-class Server:
-    def __init__(self, files, honour_ranges=True, truncate_to=None, cut_first=0):
-        self.files = files
-        self.requests = []
-        self.cuts_left = cut_first
-        outer = self
-
-        class Handler(BaseHTTPRequestHandler):
-            def do_GET(self):
-                outer.requests.append((self.path, self.headers.get("Range")))
-                body = outer.files.get(self.path.lstrip("/"))
-                if body is None:
-                    self.send_error(404)
-                    return
-                header = self.headers.get("Range")
-                if header and honour_ranges:
-                    start = int(header.removeprefix("bytes=").rstrip("-"))
-                    if start >= len(body):
-                        self.send_response(416)
-                        self.send_header("Content-Range", f"bytes */{len(body)}")
-                        self.send_header("Content-Length", "0")
-                        self.end_headers()
-                        return
-                    part = body[start:]
-                    self.send_response(206)
-                    self.send_header("Content-Range", f"bytes {start}-{len(body) - 1}/{len(body)}")
-                else:
-                    part = body
-                    self.send_response(200)
-                self.send_header("Content-Length", str(len(part)))
-                self.end_headers()
-                limit = truncate_to
-                if outer.cuts_left and len(part) > 1:
-                    outer.cuts_left -= 1
-                    limit = len(part) // 2
-                self.wfile.write(part[:limit] if limit is not None else part)
-
-            def log_message(self, *args):
-                pass
-
-        self.httpd = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-        self.url = f"http://127.0.0.1:{self.httpd.server_address[1]}/"
-        threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
-
-    def close(self):
-        self.httpd.shutdown()
-        self.httpd.server_close()
-
-
-@pytest.fixture
-def serve():
-    servers = []
-
-    def start(files, **kwargs):
-        servers.append(Server(files, **kwargs))
-        return servers[-1]
-
-    yield start
-    for server in servers:
-        server.close()
-
-
-BODY = bytes(range(256)) * 400
-
-
-def test_downloads_a_file(serve, tmp_path):
-    server = serve({"f.bin": BODY})
-    target = download(server.url + "f.bin", tmp_path / "sub" / "f.bin")
-    assert target.read_bytes() == BODY
-    assert not (tmp_path / "sub" / "f.bin.part").exists()
-
-
-def test_resumes_a_partial_download(serve, tmp_path):
-    server = serve({"f.bin": BODY})
-    (tmp_path / "f.bin.part").write_bytes(BODY[:1000])
-    assert download(server.url + "f.bin", tmp_path / "f.bin").read_bytes() == BODY
-    assert server.requests == [("/f.bin", "bytes=1000-")]
-
-
-def test_restarts_when_the_server_ignores_ranges(serve, tmp_path):
-    server = serve({"f.bin": BODY}, honour_ranges=False)
-    (tmp_path / "f.bin.part").write_bytes(b"stale bytes that must be discarded")
-    assert download(server.url + "f.bin", tmp_path / "f.bin").read_bytes() == BODY
-
-
-def test_truncated_transfer_keeps_the_partial_for_resuming(serve, tmp_path):
-    server = serve({"f.bin": BODY}, truncate_to=5000)
-    with pytest.raises(OSError):
-        download(server.url + "f.bin", tmp_path / "f.bin")
-    assert not (tmp_path / "f.bin").exists()
-    assert (tmp_path / "f.bin.part").read_bytes() == BODY[:5000]
-    server.close()
-    healthy = serve({"f.bin": BODY})
-    assert download(healthy.url + "f.bin", tmp_path / "f.bin").read_bytes() == BODY
-
-
-def test_connection_cut_mid_copy_is_a_resumable_error(serve, tmp_path, monkeypatch):
-    import http.client
-
-    import scout.data.nemotron as nemotron
-
-    server = serve({"f.bin": BODY})
-
-    def cut(source, target, length):
-        target.write(source.read(3000))
-        raise http.client.IncompleteRead(b"")
-
-    monkeypatch.setattr(nemotron.shutil, "copyfileobj", cut)
-    with pytest.raises(OSError):
-        download(server.url + "f.bin", tmp_path / "f.bin")
-    monkeypatch.undo()
-    assert (tmp_path / "f.bin.part").read_bytes() == BODY[:3000]
-    assert download(server.url + "f.bin", tmp_path / "f.bin").read_bytes() == BODY
-
-
-def test_complete_partial_is_finished_without_downloading(serve, tmp_path):
-    server = serve({"f.bin": BODY})
-    (tmp_path / "f.bin.part").write_bytes(BODY)
-    assert download(server.url + "f.bin", tmp_path / "f.bin").read_bytes() == BODY
-    assert not (tmp_path / "f.bin.part").exists()
-
-
-def test_oversized_partial_is_discarded(serve, tmp_path):
-    server = serve({"f.bin": BODY})
-    (tmp_path / "f.bin.part").write_bytes(BODY + b"extra")
-    with pytest.raises(OSError):
-        download(server.url + "f.bin", tmp_path / "f.bin")
-    assert not (tmp_path / "f.bin.part").exists()
-    assert download(server.url + "f.bin", tmp_path / "f.bin").read_bytes() == BODY
-
-
-def test_retries_resume_after_transient_cuts(serve, tmp_path):
-    server = serve({"f.bin": BODY}, cut_first=2)
-    assert download_with_retries(server.url + "f.bin", tmp_path / "f.bin", retries=3, wait=0.0).read_bytes() == BODY
-    assert [header is not None for _, header in server.requests] == [False, True, True]
-
-
-def test_retries_give_up_after_the_limit(serve, tmp_path):
-    server = serve({"f.bin": BODY}, cut_first=5)
-    with pytest.raises(OSError):
-        download_with_retries(server.url + "f.bin", tmp_path / "f.bin", retries=2, wait=0.0)
-    assert len(server.requests) == 3
-
-
-def test_missing_files_are_not_retried(serve, tmp_path):
-    server = serve({})
-    with pytest.raises(OSError):
-        download_with_retries(server.url + "gone.bin", tmp_path / "gone.bin", retries=3, wait=0.0)
-    assert len(server.requests) == 1
-
-
-def test_existing_file_is_not_downloaded_again(serve, tmp_path):
-    server = serve({"f.bin": BODY})
-    (tmp_path / "f.bin").write_bytes(b"done")
-    assert download(server.url + "f.bin", tmp_path / "f.bin").read_bytes() == b"done"
-    assert server.requests == []
 
 
 def test_command_line_downloads_a_selection(serve, tmp_path):
