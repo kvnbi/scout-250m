@@ -5,7 +5,8 @@ from scout.layers import RMSNorm
 from scout.rotary import RotaryEmbedding, apply_rotary
 
 qwen3 = pytest.importorskip("transformers.models.qwen3.modeling_qwen3")
-Qwen3Config = pytest.importorskip("transformers").Qwen3Config
+transformers = pytest.importorskip("transformers")
+Qwen3Config = transformers.Qwen3Config
 
 
 @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
@@ -116,3 +117,28 @@ def test_block_matches_transformers(dtype, n_kv_heads):
     if isinstance(their_out, tuple):
         their_out = their_out[0]
     assert torch.equal(ours(x, cos, sin), their_out)
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
+@pytest.mark.parametrize("tie", [True, False])
+def test_model_matches_transformers(dtype, tie):
+    from scout.config import ModelConfig
+    from scout.model import Scout
+
+    torch.manual_seed(5)
+    config = ModelConfig(vocab_size=2048, n_layers=3, tie_embeddings=tie, rope_theta=50000.0, norm_eps=1e-5)
+    ours = Scout(config).to(dtype)
+    with torch.no_grad():
+        for parameter in ours.parameters():
+            if parameter.dim() == 1:
+                parameter.copy_(1.0 + 0.1 * torch.randn_like(parameter))
+    their_config = Qwen3Config(**config.qwen3_config())
+    their_config._attn_implementation = "sdpa"
+    theirs = transformers.AutoModelForCausalLM.from_config(their_config, dtype=dtype)
+    assert theirs.model.rotary_emb.inv_freq.dtype == torch.float32
+    theirs.load_state_dict(ours.state_dict())
+    ids = torch.randint(0, 2048, (2, 96))
+    positions = torch.arange(7, 103).unsqueeze(0)
+    with torch.no_grad():
+        assert torch.equal(ours(ids), theirs(input_ids=ids).logits)
+        assert torch.equal(ours(ids, positions), theirs(input_ids=ids, position_ids=positions).logits)
