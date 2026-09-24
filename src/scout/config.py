@@ -18,6 +18,8 @@ class ModelConfig:
     qk_norm: bool = True
     norm_eps: float = 1e-6
     rope_theta: float = 10000.0
+    init_std: float = 0.02
+    depth_scaled_init: bool = True
 
     def __post_init__(self) -> None:
         sizes = (
@@ -38,6 +40,8 @@ class ModelConfig:
             raise ValueError("norm_eps must be positive")
         if self.rope_theta <= 1:
             raise ValueError("rope_theta must be greater than 1")
+        if self.init_std <= 0:
+            raise ValueError("init_std must be positive")
         if self.n_query_heads % self.n_kv_heads:
             raise ValueError("n_query_heads must be a multiple of n_kv_heads")
         if self.n_query_heads * self.head_dim != self.d_model:
@@ -90,6 +94,7 @@ class ModelConfig:
             "max_position_embeddings": self.context,
             "rms_norm_eps": self.norm_eps,
             "rope_theta": self.rope_theta,
+            "initializer_range": self.init_std,
             "tie_word_embeddings": self.tie_embeddings,
             "attention_bias": False,
             "attention_dropout": 0.0,

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import math
+
 import torch
 from torch import nn
 
@@ -44,6 +46,21 @@ class Scout(nn.Module):
         self.lm_head = nn.Linear(self.config.d_model, self.config.vocab_size, bias=False)
         if self.config.tie_embeddings:
             self.lm_head.weight = self.model.embed_tokens.weight
+        self.reset_parameters()
+
+    def reset_parameters(self) -> None:
+        std = self.config.init_std
+        residual_std = std / math.sqrt(2 * self.config.n_layers) if self.config.depth_scaled_init else std
+        for name, module in self.named_modules():
+            if module is self.lm_head and self.config.tie_embeddings:
+                continue
+            if isinstance(module, nn.Linear):
+                scale = residual_std if name.endswith(("o_proj", "down_proj")) else std
+                nn.init.trunc_normal_(module.weight, std=scale, a=-3 * scale, b=3 * scale)
+            elif isinstance(module, nn.Embedding):
+                nn.init.trunc_normal_(module.weight, std=std, a=-3 * std, b=3 * std)
+            elif isinstance(module, RMSNorm):
+                nn.init.ones_(module.weight)
 
     def forward(self, input_ids: torch.Tensor, positions: torch.Tensor | None = None) -> torch.Tensor:
         if input_ids.dim() != 2:

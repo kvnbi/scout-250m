@@ -34,6 +34,8 @@ def test_norm_and_rope_defaults():
     config = ModelConfig()
     assert config.norm_eps == 1e-6
     assert config.rope_theta == 10000.0
+    assert config.init_std == 0.02
+    assert config.depth_scaled_init is True
 
 
 @pytest.mark.parametrize(
@@ -42,6 +44,7 @@ def test_norm_and_rope_defaults():
         {"head_dim": 63, "n_query_heads": 1, "n_kv_heads": 1, "d_model": 63},
         {"norm_eps": 0.0},
         {"rope_theta": 1.0},
+        {"init_std": 0.0},
         {"n_layers": 0},
         {"ffn_hidden": 0},
         {"vocab_size": 0, "reserved_slots": 0},
@@ -68,6 +71,7 @@ def test_qwen3_config_fields():
         "max_position_embeddings": 2048,
         "rms_norm_eps": 1e-6,
         "rope_theta": 10000.0,
+        "initializer_range": 0.02,
         "tie_word_embeddings": True,
         "attention_bias": False,
         "attention_dropout": 0.0,
