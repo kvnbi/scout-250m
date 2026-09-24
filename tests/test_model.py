@@ -1,5 +1,6 @@
 import pytest
 import torch
+from conftest import unchanged
 
 from scout.config import ModelConfig
 from scout.layers import RMSNorm
@@ -22,6 +23,16 @@ LAYER_NAMES = (
 )
 
 
+
+@pytest.fixture(scope="module")
+def small32():
+    yield from unchanged(make())
+
+
+@pytest.fixture(scope="module")
+def small64():
+    yield from unchanged(make(dtype=torch.float64))
+
 def make(config=SMALL, dtype=torch.float32, seed=0):
     torch.manual_seed(seed)
     model = Scout(config).to(dtype)
@@ -37,10 +48,10 @@ def tokens(batch, seq, vocab=512, seed=1):
     return torch.randint(0, vocab, (batch, seq), generator=generator)
 
 
-def test_state_dict_names_match_qwen3():
+def test_state_dict_names_match_qwen3(small32):
     expected = {"model.embed_tokens.weight", "model.norm.weight", "lm_head.weight"}
     expected |= {f"model.layers.{i}.{name}" for i in range(2) for name in LAYER_NAMES}
-    assert set(make().state_dict()) == expected
+    assert set(small32.state_dict()) == expected
 
 
 def test_parameter_count_matches_config_at_full_size(full_model):
@@ -83,14 +94,14 @@ def test_tied_weight_learns_from_input_and_output():
     assert grad[100].abs().sum() == 0
 
 
-def test_logits_shape_and_dtype():
-    logits = make()(tokens(2, 16))
+def test_logits_shape_and_dtype(small32):
+    logits = small32(tokens(2, 16))
     assert logits.shape == (2, 16, 512)
     assert logits.dtype == torch.float32
 
 
-def test_matches_manual_composition():
-    model = make(dtype=torch.float64)
+def test_matches_manual_composition(small64):
+    model = small64
     ids = tokens(2, 12)
     positions = torch.arange(12).unsqueeze(0)
     h = model.model.embed_tokens(ids)
@@ -101,23 +112,23 @@ def test_matches_manual_composition():
     assert torch.equal(model(ids), expected)
 
 
-def test_default_positions_match_explicit_positions():
-    model = make()
+def test_default_positions_match_explicit_positions(small32):
+    model = small32
     ids = tokens(2, 10)
     explicit = model(ids, torch.arange(10).repeat(2, 1))
     assert torch.equal(model(ids), explicit)
 
 
-def test_shared_positions_row_matches_per_row_positions():
-    model = make()
+def test_shared_positions_row_matches_per_row_positions(small32):
+    model = small32
     ids = tokens(3, 10)
     shared = model(ids, torch.arange(5, 15).unsqueeze(0))
     per_row = model(ids, torch.arange(5, 15).repeat(3, 1))
     assert torch.equal(shared, per_row)
 
 
-def test_is_causal():
-    model = make(dtype=torch.float64)
+def test_is_causal(small64):
+    model = small64
     ids = tokens(1, 20)
     changed = ids.clone()
     changed[:, 12:] = tokens(1, 8, seed=9)
@@ -126,8 +137,8 @@ def test_is_causal():
     assert not torch.allclose(before[:, 12:], after[:, 12:])
 
 
-def test_logits_depend_only_on_relative_positions():
-    model = make(dtype=torch.float64)
+def test_logits_depend_only_on_relative_positions(small64):
+    model = small64
     ids = tokens(2, 24)
     near = model(ids)
     far = model(ids, torch.arange(1000, 1024).unsqueeze(0))
@@ -155,8 +166,8 @@ def test_bfloat16_runs_and_stays_finite():
     assert torch.isfinite(logits).all()
 
 
-def test_autocast_forward_is_finite():
-    model = make()
+def test_autocast_forward_is_finite(small32):
+    model = small32
     with torch.autocast(device_type="cpu", dtype=torch.bfloat16):
         logits = model(tokens(2, 16))
     assert torch.isfinite(logits).all()
@@ -171,23 +182,23 @@ def test_every_parameter_receives_a_finite_gradient():
 
 
 @pytest.mark.parametrize("ids", [torch.zeros(8, dtype=torch.long), torch.zeros(1, 2, 3, dtype=torch.long)])
-def test_rejects_input_ids_of_the_wrong_rank(ids):
+def test_rejects_input_ids_of_the_wrong_rank(ids, small32):
     with pytest.raises(ValueError):
-        make()(ids)
+        small32(ids)
 
 
 @pytest.mark.parametrize("dtype", [torch.float32, torch.bool])
-def test_rejects_non_integer_input_ids(dtype):
+def test_rejects_non_integer_input_ids(dtype, small32):
     with pytest.raises(TypeError):
-        make()(torch.zeros(1, 4, dtype=dtype))
+        small32(torch.zeros(1, 4, dtype=dtype))
 
 
 @pytest.mark.parametrize("positions", [torch.arange(4), torch.arange(5).unsqueeze(0), torch.arange(4).repeat(3, 1)])
-def test_rejects_positions_of_the_wrong_shape(positions):
+def test_rejects_positions_of_the_wrong_shape(positions, small32):
     with pytest.raises(ValueError):
-        make()(tokens(2, 4), positions)
+        small32(tokens(2, 4), positions)
 
 
-def test_rejects_out_of_range_token_ids():
+def test_rejects_out_of_range_token_ids(small32):
     with pytest.raises(IndexError):
-        make()(torch.full((1, 4), 512, dtype=torch.long))
+        small32(torch.full((1, 4), 512, dtype=torch.long))

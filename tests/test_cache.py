@@ -1,5 +1,6 @@
 import pytest
 import torch
+from conftest import unchanged
 
 from scout.cache import KVCache
 from scout.config import ModelConfig
@@ -8,6 +9,16 @@ from scout.model import Scout
 
 SMALL = ModelConfig(vocab_size=512, n_layers=3)
 
+
+
+@pytest.fixture(scope="module")
+def model64():
+    yield from unchanged(make())
+
+
+@pytest.fixture(scope="module")
+def model32():
+    yield from unchanged(make(torch.float32))
 
 def make(dtype=torch.float64, seed=0, config=SMALL):
     torch.manual_seed(seed)
@@ -27,16 +38,16 @@ def cache_for(model, batch, max_length):
     return KVCache(model.config, batch, max_length, model.lm_head.weight.dtype)
 
 
-def test_prefill_matches_uncached_forward():
-    model = make()
+def test_prefill_matches_uncached_forward(model64):
+    model = model64
     ids = tokens(2, 24)
     cache = cache_for(model, 2, 24)
     torch.testing.assert_close(model.forward_cached(ids, cache), model(ids), rtol=1e-12, atol=1e-12)
     assert cache.length == 24
 
 
-def test_token_by_token_matches_uncached_forward():
-    model = make()
+def test_token_by_token_matches_uncached_forward(model64):
+    model = model64
     ids = tokens(2, 20)
     cache = cache_for(model, 2, 20)
     stepped = torch.cat([model.forward_cached(ids[:, t : t + 1], cache) for t in range(20)], dim=1)
@@ -44,8 +55,8 @@ def test_token_by_token_matches_uncached_forward():
 
 
 @pytest.mark.parametrize("chunks", [(5, 3, 7, 1, 4), (1, 19), (19, 1)])
-def test_chunked_prefill_matches_uncached_forward(chunks):
-    model = make()
+def test_chunked_prefill_matches_uncached_forward(chunks, model64):
+    model = model64
     ids = tokens(2, 20)
     cache = cache_for(model, 2, 20)
     pieces, start = [], 0
@@ -55,16 +66,16 @@ def test_chunked_prefill_matches_uncached_forward(chunks):
     torch.testing.assert_close(torch.cat(pieces, dim=1), model(ids), rtol=1e-12, atol=1e-12)
 
 
-def test_float32_decoding_stays_within_rounding():
-    model = make(torch.float32)
+def test_float32_decoding_stays_within_rounding(model32):
+    model = model32
     ids = tokens(2, 32)
     cache = cache_for(model, 2, 32)
     stepped = torch.cat([model.forward_cached(ids[:, t : t + 1], cache) for t in range(32)], dim=1)
     torch.testing.assert_close(stepped, model(ids), rtol=1e-4, atol=1e-5)
 
 
-def test_left_padding_matches_unpadded_rows():
-    model = make()
+def test_left_padding_matches_unpadded_rows(model64):
+    model = model64
     short, long = tokens(1, 9, seed=2), tokens(1, 14, seed=3)
     padded = torch.cat((torch.cat((torch.zeros(1, 5, dtype=torch.long), short), dim=1), long))
     valid = torch.ones(2, 14, dtype=torch.bool)
@@ -85,8 +96,8 @@ def test_padding_positions_stay_finite(dtype):
     assert torch.isfinite(logits).all()
 
 
-def test_ragged_appends_match_each_row_alone():
-    model = make()
+def test_ragged_appends_match_each_row_alone(model64):
+    model = model64
     first = [tokens(1, 6, seed=4), tokens(1, 6, seed=5)]
     second = [tokens(1, 3, seed=6), tokens(1, 7, seed=7)]
     third = [tokens(1, 2, seed=8), tokens(1, 2, seed=9)]
@@ -104,8 +115,8 @@ def test_ragged_appends_match_each_row_alone():
         torch.testing.assert_close(logits[row], alone[0, -2:], rtol=1e-12, atol=1e-12)
 
 
-def test_last_only_returns_final_position():
-    model = make()
+def test_last_only_returns_final_position(model64):
+    model = model64
     ids = tokens(2, 10)
     cache = cache_for(model, 2, 10)
     last = model.forward_cached(ids, cache, last_only=True)
@@ -120,24 +131,24 @@ def test_cache_size_matches_config():
     assert stored == 2 * 100 * config.kv_cache_bytes_per_token(2)
 
 
-def test_rejects_overflow():
-    model = make()
+def test_rejects_overflow(model64):
+    model = model64
     cache = cache_for(model, 1, 8)
     model.forward_cached(tokens(1, 6), cache)
     with pytest.raises(ValueError):
         model.forward_cached(tokens(1, 3), cache)
 
 
-def test_rejects_wrong_batch_and_mask():
-    model = make()
+def test_rejects_wrong_batch_and_mask(model64):
+    model = model64
     with pytest.raises(ValueError):
         model.forward_cached(tokens(2, 4), cache_for(model, 3, 8))
     with pytest.raises(ValueError):
         model.forward_cached(tokens(2, 4), cache_for(model, 2, 8), valid=torch.ones(2, 3, dtype=torch.bool))
 
 
-def test_rejects_mismatched_cache_dtype():
-    model = make(torch.float32)
+def test_rejects_mismatched_cache_dtype(model32):
+    model = model32
     with pytest.raises(TypeError):
         model.forward_cached(tokens(1, 4), KVCache(model.config, 1, 8, torch.float64))
 
@@ -157,14 +168,14 @@ def naive_greedy(model, prompt, steps):
     return ids[:, prompt.shape[1] :]
 
 
-def test_greedy_generation_matches_uncached_decoding():
-    model = make(torch.float32)
+def test_greedy_generation_matches_uncached_decoding(model32):
+    model = model32
     prompt = tokens(3, 12)
     assert torch.equal(generate(model, prompt, 16), naive_greedy(model, prompt, 16))
 
 
-def test_sampling_is_reproducible_with_a_generator():
-    model = make(torch.float32)
+def test_sampling_is_reproducible_with_a_generator(model32):
+    model = model32
     prompt = tokens(2, 8)
     first = generate(model, prompt, 12, temperature=1.0, generator=torch.Generator().manual_seed(5))
     second = generate(model, prompt, 12, temperature=1.0, generator=torch.Generator().manual_seed(5))
@@ -173,8 +184,8 @@ def test_sampling_is_reproducible_with_a_generator():
     assert not torch.equal(first, other)
 
 
-def test_stop_token_ends_rows_and_generation():
-    model = make(torch.float32)
+def test_stop_token_ends_rows_and_generation(model32):
+    model = model32
     prompt = tokens(2, 8)
     free = generate(model, prompt, 10)
     stop = int(free[0, 2])
@@ -184,15 +195,15 @@ def test_stop_token_ends_rows_and_generation():
     assert (stopped[0, first_stop:] == stop).all()
 
 
-def test_generation_stops_early_when_every_row_finishes():
-    model = make(torch.float32)
+def test_generation_stops_early_when_every_row_finishes(model32):
+    model = model32
     prompt = tokens(1, 8)
     stop = int(generate(model, prompt, 1)[0, 0])
     assert generate(model, prompt, 10, stop_token=stop).shape == (1, 1)
 
 
-def test_logits_processor_is_applied_with_history():
-    model = make(torch.float32)
+def test_logits_processor_is_applied_with_history(model32):
+    model = model32
     prompt = tokens(2, 8)
     seen = []
 
@@ -212,6 +223,6 @@ def test_logits_processor_is_applied_with_history():
     "kwargs",
     [{"max_new_tokens": 0}, {"max_new_tokens": 4, "temperature": -1.0}],
 )
-def test_generate_rejects_invalid_settings(kwargs):
+def test_generate_rejects_invalid_settings(kwargs, model32):
     with pytest.raises(ValueError):
-        generate(make(torch.float32), tokens(1, 4), **kwargs)
+        generate(model32, tokens(1, 4), **kwargs)
