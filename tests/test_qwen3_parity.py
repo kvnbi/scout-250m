@@ -84,3 +84,35 @@ def test_mlp_matches_transformers(dtype):
     theirs.load_state_dict(ours.state_dict())
     x = torch.randn(2, 64, 896).to(dtype)
     assert torch.equal(ours(x), theirs(x))
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
+@pytest.mark.parametrize("n_kv_heads", [2, 7])
+def test_block_matches_transformers(dtype, n_kv_heads):
+    from scout.block import Block
+
+    torch.manual_seed(4)
+    config = Qwen3Config(
+        hidden_size=896,
+        intermediate_size=2432,
+        num_attention_heads=14,
+        num_key_value_heads=n_kv_heads,
+        head_dim=64,
+        rms_norm_eps=1e-6,
+        rope_parameters={"rope_type": "default", "rope_theta": 10000.0},
+    )
+    config._attn_implementation = "sdpa"
+    ours = Block(896, 14, n_kv_heads, 64, 2432).to(dtype)
+    with torch.no_grad():
+        for parameter in ours.parameters():
+            if parameter.dim() == 1:
+                parameter.copy_(1.0 + 0.1 * torch.randn_like(parameter))
+    theirs = qwen3.Qwen3DecoderLayer(config, layer_idx=0).to(dtype)
+    theirs.load_state_dict(ours.state_dict())
+    positions = torch.arange(128).repeat(2, 1)
+    x = torch.randn(2, 128, 896).to(dtype)
+    cos, sin = RotaryEmbedding(64)(positions, dtype)
+    their_out = theirs(x, attention_mask=None, position_embeddings=(cos, sin))
+    if isinstance(their_out, tuple):
+        their_out = their_out[0]
+    assert torch.equal(ours(x, cos, sin), their_out)
