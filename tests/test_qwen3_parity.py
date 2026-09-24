@@ -71,3 +71,16 @@ def test_attention_matches_transformers(dtype, n_kv_heads):
     their_out, _ = theirs(x, (cos, sin), attention_mask=None)
     tolerance = {torch.float32: 1e-5, torch.bfloat16: 1e-2}[dtype]
     torch.testing.assert_close(ours(x, cos, sin), their_out, rtol=tolerance, atol=tolerance)
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
+def test_mlp_matches_transformers(dtype):
+    from scout.mlp import SwiGLU
+
+    torch.manual_seed(3)
+    config = Qwen3Config(hidden_size=896, intermediate_size=2432, hidden_act="silu")
+    ours = SwiGLU(896, 2432).to(dtype)
+    theirs = qwen3.Qwen3MLP(config).to(dtype)
+    theirs.load_state_dict(ours.state_dict())
+    x = torch.randn(2, 64, 896).to(dtype)
+    assert torch.equal(ours(x), theirs(x))
