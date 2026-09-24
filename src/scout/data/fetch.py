@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import hashlib
 import http.client
 import json
@@ -145,3 +146,39 @@ def sample_files(files: Sequence[HubFile], count: int | None, seed: int) -> list
         return sorted(files, key=lambda f: f.path)
     population = sorted(files, key=lambda f: f.path)
     return sorted(random.Random(f"{seed}").sample(population, count), key=lambda f: f.path)
+
+
+def run_hub_fetch(repo: str, default_folder: str, description: str, argv: Sequence[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=description)
+    parser.add_argument("--out", type=Path, required=True)
+    parser.add_argument("--folder", default=default_folder)
+    parser.add_argument("--files", type=int, default=None)
+    parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--revision", default=None)
+    parser.add_argument("--base-url", default=HUB_URL)
+    parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--retries", type=int, default=5)
+    parser.add_argument("--retry-wait", type=float, default=5.0)
+    args = parser.parse_args(argv)
+    if args.retries < 0 or args.retry_wait < 0:
+        parser.error("retries and retry wait must not be negative")
+    revision = args.revision or hub_revision(repo, args.base_url)
+    chosen = sample_files(hub_files(repo, revision, args.folder, ".parquet", args.base_url), args.files, args.seed)
+    args.out.mkdir(parents=True, exist_ok=True)
+    selection = {
+        "repo": repo,
+        "revision": revision,
+        "folder": args.folder,
+        "files_requested": args.files,
+        "seed": args.seed,
+        "files": [{"path": f.path, "size": f.size, "sha256": f.sha256} for f in chosen],
+    }
+    (args.out / "selection.json").write_text(json.dumps(selection, indent=2) + "\n", encoding="utf-8")
+    print(f"selected {len(chosen)} files, {sum(f.size for f in chosen) / 2**30:.1f} GiB at {revision}")
+    if args.dry_run:
+        return 0
+    for number, file in enumerate(chosen, start=1):
+        url = hub_file_url(repo, revision, file.path, args.base_url)
+        download_with_retries(url, args.out / file.path, args.retries, args.retry_wait, file.sha256)
+        print(f"{number}/{len(chosen)} {file.path}", flush=True)
+    return 0
