@@ -6,6 +6,7 @@ import torch
 from torch import nn
 
 from scout.block import Block
+from scout.cache import KVCache
 from scout.config import ModelConfig
 from scout.layers import RMSNorm
 from scout.loss import IGNORE_INDEX, LossTotals, lm_loss, lm_loss_totals
@@ -31,11 +32,11 @@ class Backbone(nn.Module):
         self.norm = RMSNorm(config.d_model, config.norm_eps)
         self.rotary_emb = RotaryEmbedding(config.head_dim, config.rope_theta)
 
-    def forward(self, input_ids: torch.Tensor, positions: torch.Tensor) -> torch.Tensor:
+    def forward(self, input_ids: torch.Tensor, positions: torch.Tensor, cache: KVCache | None = None) -> torch.Tensor:
         h = self.embed_tokens(input_ids)
         cos, sin = self.rotary_emb(positions, h.dtype)
-        for layer in self.layers:
-            h = layer(h, cos, sin)
+        for index, layer in enumerate(self.layers):
+            h = layer(h, cos, sin, None if cache is None else cache.layer(index))
         return self.norm(h)
 
 
@@ -87,13 +88,46 @@ class Scout(nn.Module):
         return lm_loss_totals(self.hidden_states(input_ids, positions), self.lm_head.weight, targets, chunk_size)
 
     def hidden_states(self, input_ids: torch.Tensor, positions: torch.Tensor | None = None) -> torch.Tensor:
+        batch, seq = self._check_input_ids(input_ids)
+        if positions is None:
+            positions = torch.arange(seq, device=input_ids.device).unsqueeze(0)
+        else:
+            self._check_positions(positions, batch, seq)
+        return self.model(input_ids, positions)
+
+    def forward_cached(
+        self,
+        input_ids: torch.Tensor,
+        cache: KVCache,
+        valid: torch.Tensor | None = None,
+        positions: torch.Tensor | None = None,
+        last_only: bool = False,
+    ) -> torch.Tensor:
+        batch, seq = self._check_input_ids(input_ids)
+        if batch != cache.batch:
+            raise ValueError(f"cache holds {cache.batch} rows, got {batch}")
+        if valid is None:
+            valid = torch.ones(batch, seq, dtype=torch.bool, device=input_ids.device)
+        counted = cache.begin(valid)
+        if positions is None:
+            positions = counted
+        else:
+            self._check_positions(positions, batch, seq)
+        hidden = self.model(input_ids, positions, cache)
+        cache.commit()
+        if last_only:
+            hidden = hidden[:, -1:]
+        return self.lm_head(hidden)
+
+    @staticmethod
+    def _check_input_ids(input_ids: torch.Tensor) -> tuple[int, int]:
         if input_ids.dim() != 2:
             raise ValueError(f"expected input_ids of shape (batch, seq), got {tuple(input_ids.shape)}")
         if input_ids.is_floating_point() or input_ids.is_complex() or input_ids.dtype == torch.bool:
             raise TypeError(f"expected integer token ids, got {input_ids.dtype}")
-        batch, seq = input_ids.shape
-        if positions is None:
-            positions = torch.arange(seq, device=input_ids.device).unsqueeze(0)
-        elif positions.dim() != 2 or positions.shape[0] not in (1, batch) or positions.shape[1] != seq:
+        return input_ids.shape[0], input_ids.shape[1]
+
+    @staticmethod
+    def _check_positions(positions: torch.Tensor, batch: int, seq: int) -> None:
+        if positions.dim() != 2 or positions.shape[0] not in (1, batch) or positions.shape[1] != seq:
             raise ValueError(f"expected positions of shape (batch, {seq}), got {tuple(positions.shape)}")
-        return self.model(input_ids, positions)

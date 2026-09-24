@@ -4,6 +4,7 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 
+from scout.cache import LayerCache
 from scout.layers import RMSNorm
 from scout.rotary import apply_rotary
 
@@ -37,7 +38,9 @@ class Attention(nn.Module):
         self.q_norm = RMSNorm(head_dim, eps) if qk_norm else nn.Identity()
         self.k_norm = RMSNorm(head_dim, eps) if qk_norm else nn.Identity()
 
-    def forward(self, x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self, x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor, cache: LayerCache | None = None
+    ) -> torch.Tensor:
         if x.dim() != 3 or x.shape[-1] != self.d_model:
             raise ValueError(f"expected input of shape (batch, seq, {self.d_model}), got {tuple(x.shape)}")
         batch, seq, _ = x.shape
@@ -51,14 +54,14 @@ class Attention(nn.Module):
         v = self.v_proj(x).view(batch, seq, -1, self.head_dim).transpose(1, 2)
         q = apply_rotary(q, cos, sin)
         k = apply_rotary(k, cos, sin)
-        out = F.scaled_dot_product_attention(
-            q,
-            k,
-            v,
-            is_causal=True,
-            scale=self.scaling,
-            enable_gqa=self.n_query_heads != self.n_kv_heads,
-        )
+        grouped = self.n_query_heads != self.n_kv_heads
+        if cache is None:
+            out = F.scaled_dot_product_attention(q, k, v, is_causal=True, scale=self.scaling, enable_gqa=grouped)
+        else:
+            k, v = cache.store(k, v)
+            out = F.scaled_dot_product_attention(
+                q, k, v, attn_mask=cache.mask, scale=self.scaling, enable_gqa=grouped
+            )
         return self.o_proj(out.transpose(1, 2).reshape(batch, seq, -1))
 
     def extra_repr(self) -> str:

@@ -161,3 +161,24 @@ def test_loss_matches_transformers():
     with torch.no_grad():
         their_loss = theirs(input_ids=ids, labels=ids).loss
         torch.testing.assert_close(ours.loss(ids, targets, chunk_size=13), their_loss, rtol=1e-6, atol=1e-6)
+
+
+def test_greedy_generation_matches_transformers():
+    from scout.config import ModelConfig
+    from scout.generate import generate
+    from scout.model import Scout
+
+    torch.manual_seed(7)
+    config = ModelConfig(vocab_size=2048, n_layers=3)
+    ours = Scout(config)
+    with torch.no_grad():
+        for parameter in ours.parameters():
+            if parameter.dim() == 1:
+                parameter.copy_(1.0 + 0.1 * torch.randn_like(parameter))
+    their_config = Qwen3Config(**config.qwen3_config())
+    their_config._attn_implementation = "sdpa"
+    theirs = transformers.AutoModelForCausalLM.from_config(their_config, dtype=torch.float32)
+    theirs.load_state_dict(ours.state_dict())
+    prompt = torch.randint(0, 2048, (2, 16))
+    their_tokens = theirs.generate(prompt, max_new_tokens=24, do_sample=False, pad_token_id=0)[:, 16:]
+    assert torch.equal(generate(ours, prompt, 24), their_tokens)

@@ -4,6 +4,7 @@ import torch
 from torch import nn
 
 from scout.attention import Attention
+from scout.cache import LayerCache
 from scout.layers import RMSNorm
 from scout.mlp import SwiGLU
 
@@ -25,6 +26,8 @@ class Block(nn.Module):
         self.post_attention_layernorm = RMSNorm(d_model, eps)
         self.mlp = SwiGLU(d_model, ffn_hidden)
 
-    def forward(self, x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor) -> torch.Tensor:
-        x = x + self.self_attn(self.input_layernorm(x), cos, sin)
+    def forward(
+        self, x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor, cache: LayerCache | None = None
+    ) -> torch.Tensor:
+        x = x + self.self_attn(self.input_layernorm(x), cos, sin, cache)
         return x + self.mlp(self.post_attention_layernorm(x))
