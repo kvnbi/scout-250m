@@ -8,6 +8,7 @@ from torch import nn
 from scout.block import Block
 from scout.config import ModelConfig
 from scout.layers import RMSNorm
+from scout.loss import IGNORE_INDEX, LossTotals, lm_loss, lm_loss_totals
 from scout.rotary import RotaryEmbedding
 
 
@@ -63,6 +64,29 @@ class Scout(nn.Module):
                 nn.init.ones_(module.weight)
 
     def forward(self, input_ids: torch.Tensor, positions: torch.Tensor | None = None) -> torch.Tensor:
+        return self.lm_head(self.hidden_states(input_ids, positions))
+
+    def loss(
+        self,
+        input_ids: torch.Tensor,
+        targets: torch.Tensor,
+        positions: torch.Tensor | None = None,
+        chunk_size: int = 4096,
+        z_loss_weight: float = 0.0,
+    ) -> torch.Tensor:
+        hidden = self.hidden_states(input_ids, positions)
+        return lm_loss(hidden, self.lm_head.weight, targets, chunk_size, IGNORE_INDEX, z_loss_weight)
+
+    def loss_totals(
+        self,
+        input_ids: torch.Tensor,
+        targets: torch.Tensor,
+        positions: torch.Tensor | None = None,
+        chunk_size: int = 4096,
+    ) -> LossTotals:
+        return lm_loss_totals(self.hidden_states(input_ids, positions), self.lm_head.weight, targets, chunk_size)
+
+    def hidden_states(self, input_ids: torch.Tensor, positions: torch.Tensor | None = None) -> torch.Tensor:
         if input_ids.dim() != 2:
             raise ValueError(f"expected input_ids of shape (batch, seq), got {tuple(input_ids.shape)}")
         if input_ids.is_floating_point() or input_ids.is_complex() or input_ids.dtype == torch.bool:
@@ -72,4 +96,4 @@ class Scout(nn.Module):
             positions = torch.arange(seq, device=input_ids.device).unsqueeze(0)
         elif positions.dim() != 2 or positions.shape[0] not in (1, batch) or positions.shape[1] != seq:
             raise ValueError(f"expected positions of shape (batch, {seq}), got {tuple(positions.shape)}")
-        return self.lm_head(self.model(input_ids, positions))
+        return self.model(input_ids, positions)

@@ -142,3 +142,22 @@ def test_model_matches_transformers(dtype, tie):
     with torch.no_grad():
         assert torch.equal(ours(ids), theirs(input_ids=ids).logits)
         assert torch.equal(ours(ids, positions), theirs(input_ids=ids, position_ids=positions).logits)
+
+
+def test_loss_matches_transformers():
+    from scout.config import ModelConfig
+    from scout.model import Scout
+
+    torch.manual_seed(6)
+    config = ModelConfig(vocab_size=2048, n_layers=2)
+    ours = Scout(config)
+    their_config = Qwen3Config(**config.qwen3_config())
+    their_config._attn_implementation = "sdpa"
+    theirs = transformers.AutoModelForCausalLM.from_config(their_config, dtype=torch.float32)
+    theirs.load_state_dict(ours.state_dict())
+    ids = torch.randint(0, 2048, (2, 64))
+    targets = torch.roll(ids, -1, 1)
+    targets[:, -1] = -100
+    with torch.no_grad():
+        their_loss = theirs(input_ids=ids, labels=ids).loss
+        torch.testing.assert_close(ours.loss(ids, targets, chunk_size=13), their_loss, rtol=1e-6, atol=1e-6)
