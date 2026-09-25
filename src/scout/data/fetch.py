@@ -116,7 +116,10 @@ def hub_revision(repo: str, base_url: str = HUB_URL) -> str:
 
 
 def hub_files(repo: str, revision: str, folder: str, suffix: str, base_url: str = HUB_URL) -> list[HubFile]:
-    url = f"{base_url}api/datasets/{repo}/tree/{revision}/{urllib.parse.quote(folder)}"
+    folder = folder.strip("/")
+    url = f"{base_url}api/datasets/{repo}/tree/{revision}"
+    if folder:
+        url += f"/{urllib.parse.quote(folder)}"
     files = []
     while url is not None:
         entries, url = _get_json(url)
@@ -148,7 +151,9 @@ def sample_files(files: Sequence[HubFile], count: int | None, seed: int) -> list
     return sorted(random.Random(f"{seed}").sample(population, count), key=lambda f: f.path)
 
 
-def run_hub_fetch(repo: str, default_folder: str, description: str, argv: Sequence[str] | None = None) -> int:
+def run_hub_fetch(
+    repo: str, default_folder: str, description: str, argv: Sequence[str] | None = None, suffix: str = ".parquet"
+) -> int:
     parser = argparse.ArgumentParser(description=description)
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--folder", default=default_folder)
@@ -163,7 +168,7 @@ def run_hub_fetch(repo: str, default_folder: str, description: str, argv: Sequen
     if args.retries < 0 or args.retry_wait < 0:
         parser.error("retries and retry wait must not be negative")
     revision = args.revision or hub_revision(repo, args.base_url)
-    chosen = sample_files(hub_files(repo, revision, args.folder, ".parquet", args.base_url), args.files, args.seed)
+    chosen = sample_files(hub_files(repo, revision, args.folder, suffix, args.base_url), args.files, args.seed)
     args.out.mkdir(parents=True, exist_ok=True)
     selection = {
         "repo": repo,

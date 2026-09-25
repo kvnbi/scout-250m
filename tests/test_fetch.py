@@ -192,6 +192,19 @@ def test_lists_files_across_pages(serve):
     assert files == [HubFile("sample/10BT/000.parquet", 5, "0" * 64), HubFile("sample/10BT/001.parquet", 7, "1" * 64)]
 
 
+@pytest.mark.parametrize("folder", ["", "/"])
+def test_lists_the_repository_root_without_a_redirect(serve, folder):
+    entries = [listing_entry("a-0000.json.gz", "2" * 64, 9), listing_entry("README.md"), listing_entry("v0", kind="directory")]
+    server = serve({f"api/datasets/org/data/tree/{REVISION}": json.dumps(entries).encode()})
+    assert hub_files("org/data", REVISION, folder, ".json.gz", server.url) == [HubFile("a-0000.json.gz", 9, "2" * 64)]
+    assert [path for path, _ in server.requests] == [f"/api/datasets/org/data/tree/{REVISION}"]
+
+
+def test_folder_slashes_are_ignored(serve):
+    server = serve({f"api/datasets/org/data/tree/{REVISION}/f": json.dumps([listing_entry("f/x.parquet")]).encode()})
+    assert [f.path for f in hub_files("org/data", REVISION, "/f/", ".parquet", server.url)] == ["f/x.parquet"]
+
+
 def test_listing_requires_sha256_and_matches(serve):
     path = f"api/datasets/org/data/tree/{REVISION}/f"
     server = serve({path: json.dumps([{"type": "file", "path": "f/x.parquet", "size": 3}]).encode()})
