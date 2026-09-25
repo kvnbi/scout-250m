@@ -145,10 +145,12 @@ def hub_file_url(repo: str, revision: str, path: str, base_url: str = HUB_URL) -
 def sample_files(files: Sequence[HubFile], count: int | None, seed: int) -> list[HubFile]:
     if count is not None and count < 1:
         raise ValueError("count must be positive")
-    if count is None or count >= len(files):
-        return sorted(files, key=lambda f: f.path)
     population = sorted(files, key=lambda f: f.path)
-    return sorted(random.Random(f"{seed}").sample(population, count), key=lambda f: f.path)
+    if count is None or count >= len(population):
+        return population
+    offset = random.Random(f"{seed}").randrange(len(population))
+    picks = {(offset + i * len(population) // count) % len(population) for i in range(count)}
+    return [population[i] for i in sorted(picks)]
 
 
 def run_hub_fetch(

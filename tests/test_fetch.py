@@ -231,9 +231,20 @@ def test_sampling_is_seeded_sorted_and_order_independent():
     files = [HubFile(f"f/{i:03d}.parquet", 1, "c" * 64) for i in range(30)]
     first = sample_files(files, 5, seed=1)
     assert first == sample_files(list(reversed(files)), 5, seed=1)
-    assert first != sample_files(files, 5, seed=2)
+    assert len({tuple(sample_files(files, 5, seed=s)) for s in range(20)}) > 1
     assert first == sorted(first, key=lambda f: f.path)
+    assert len(set(first)) == 5
+    assert {f for s in range(300) for f in sample_files(files, 5, seed=s)} == set(files)
     assert sample_files(files, None, seed=1) == files
     assert sample_files(files, 99, seed=1) == files
     with pytest.raises(ValueError):
         sample_files(files, 0, seed=1)
+
+
+@pytest.mark.parametrize("total, count", [(95, 10), (44, 4), (30, 7), (64, 63), (5, 1)])
+def test_sampled_files_are_spread_evenly_so_sorted_groups_keep_their_share(total, count):
+    files = [HubFile(f"f/{i:04d}.json.gz", 1, "c" * 64) for i in range(total)]
+    for seed in range(50):
+        positions = [files.index(f) for f in sample_files(files, count, seed)]
+        gaps = [b - a for a, b in zip(positions, positions[1:] + [positions[0] + total])]
+        assert set(gaps) <= {total // count, -(-total // count)}
