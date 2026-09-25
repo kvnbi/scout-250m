@@ -10,6 +10,15 @@ from scout.model import Scout
 SMALL = ModelConfig(vocab_size=512, n_layers=3)
 
 
+def make(dtype=torch.float64, seed=0, config=SMALL):
+    torch.manual_seed(seed)
+    model = Scout(config).to(dtype)
+    with torch.no_grad():
+        for parameter in model.parameters():
+            if parameter.dim() == 1:
+                parameter.copy_(1.0 + 0.1 * torch.randn_like(parameter))
+    return model
+
 
 @pytest.fixture(scope="module")
 def model64():
@@ -19,15 +28,6 @@ def model64():
 @pytest.fixture(scope="module")
 def model32():
     yield from unchanged(make(torch.float32))
-
-def make(dtype=torch.float64, seed=0, config=SMALL):
-    torch.manual_seed(seed)
-    model = Scout(config).to(dtype)
-    with torch.no_grad():
-        for parameter in model.parameters():
-            if parameter.dim() == 1:
-                parameter.copy_(1.0 + 0.1 * torch.randn_like(parameter))
-    return model
 
 
 def tokens(batch, seq, seed=1):
@@ -172,6 +172,40 @@ def test_greedy_generation_matches_uncached_decoding(model32):
     model = model32
     prompt = tokens(3, 12)
     assert torch.equal(generate(model, prompt, 16), naive_greedy(model, prompt, 16))
+
+
+def naive_sampling(model, prompt, steps, temperature, generator):
+    ids = prompt
+    for _ in range(steps):
+        probabilities = torch.softmax(model(ids)[:, -1].float() / temperature, dim=-1)
+        ids = torch.cat((ids, torch.multinomial(probabilities, 1, generator=generator)), dim=1)
+    return ids[:, prompt.shape[1] :]
+
+
+def test_sampling_matches_uncached_sampling(model64):
+    prompt = tokens(3, 8)
+    ours = generate(model64, prompt, 12, temperature=0.8, generator=torch.Generator().manual_seed(11))
+    expected = naive_sampling(model64, prompt, 12, 0.8, torch.Generator().manual_seed(11))
+    assert torch.equal(ours, expected)
+
+
+def test_generation_calls_the_model_once_per_token(model32, monkeypatch):
+    calls = []
+    real = model32.forward_cached
+
+    def counted(*args, **kwargs):
+        calls.append(args[0].shape[1])
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(model32, "forward_cached", counted)
+    prompt = tokens(2, 8)
+    assert generate(model32, prompt, 5).shape == (2, 5)
+    assert calls == [8, 1, 1, 1, 1]
+    calls.clear()
+    stop = int(generate(model32, prompt[:1], 1)[0, 0])
+    calls.clear()
+    assert generate(model32, prompt[:1], 5, stop_token=stop).shape == (1, 1)
+    assert calls == [8]
 
 
 def test_sampling_is_reproducible_with_a_generator(model32):

@@ -31,11 +31,11 @@ def generate(
     dtype = cache_dtype if cache_dtype is not None else model.lm_head.weight.dtype
     cache = KVCache(model.config, batch, length + max_new_tokens, dtype, prompt.device)
     logits = model.forward_cached(prompt, cache, last_only=True)[:, -1]
-    generated = prompt.new_empty((batch, 0))
+    generated = prompt.new_empty((batch, max_new_tokens))
     finished = torch.zeros(batch, dtype=torch.bool, device=prompt.device)
     for step in range(max_new_tokens):
         if logits_processor is not None:
-            logits = logits_processor(logits, generated)
+            logits = logits_processor(logits, generated[:, :step])
         if temperature == 0:
             chosen = logits.argmax(dim=-1)
         else:
@@ -44,8 +44,8 @@ def generate(
         if stop_token is not None:
             chosen = torch.where(finished, stop_token, chosen)
             finished = finished | (chosen == stop_token)
-        generated = torch.cat((generated, chosen[:, None]), dim=1)
-        if step == max_new_tokens - 1 or bool(finished.all()):
+        generated[:, step] = chosen
+        if step + 1 == max_new_tokens or (stop_token is not None and bool(finished.all())):
             break
         logits = model.forward_cached(chosen[:, None], cache, last_only=True)[:, -1]
-    return generated
+    return generated[:, : step + 1]
