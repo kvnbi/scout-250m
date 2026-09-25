@@ -1,7 +1,13 @@
 import pytest
 import torch
 
+from scout.attention import Attention
+from scout.block import Block
+from scout.config import ModelConfig
+from scout.generate import generate
 from scout.layers import RMSNorm
+from scout.mlp import SwiGLU
+from scout.model import Scout
 from scout.rotary import RotaryEmbedding, apply_rotary
 
 qwen3 = pytest.importorskip("transformers.models.qwen3.modeling_qwen3")
@@ -49,8 +55,6 @@ def test_rotary_matches_transformers(dtype):
 @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
 @pytest.mark.parametrize("n_kv_heads", [2, 7])
 def test_attention_matches_transformers(dtype, n_kv_heads):
-    from scout.attention import Attention
-
     torch.manual_seed(2)
     config = Qwen3Config(
         hidden_size=896,
@@ -70,14 +74,11 @@ def test_attention_matches_transformers(dtype, n_kv_heads):
     x = torch.randn(2, 256, 896).to(dtype)
     cos, sin = RotaryEmbedding(64)(positions, dtype)
     their_out, _ = theirs(x, (cos, sin), attention_mask=None)
-    tolerance = {torch.float32: 1e-5, torch.bfloat16: 1e-2}[dtype]
-    torch.testing.assert_close(ours(x, cos, sin), their_out, rtol=tolerance, atol=tolerance)
+    assert torch.equal(ours(x, cos, sin), their_out)
 
 
 @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
 def test_mlp_matches_transformers(dtype):
-    from scout.mlp import SwiGLU
-
     torch.manual_seed(3)
     config = Qwen3Config(hidden_size=896, intermediate_size=2432, hidden_act="silu")
     ours = SwiGLU(896, 2432).to(dtype)
@@ -90,8 +91,6 @@ def test_mlp_matches_transformers(dtype):
 @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
 @pytest.mark.parametrize("n_kv_heads", [2, 7])
 def test_block_matches_transformers(dtype, n_kv_heads):
-    from scout.block import Block
-
     torch.manual_seed(4)
     config = Qwen3Config(
         hidden_size=896,
@@ -122,9 +121,6 @@ def test_block_matches_transformers(dtype, n_kv_heads):
 @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
 @pytest.mark.parametrize("tie", [True, False])
 def test_model_matches_transformers(dtype, tie):
-    from scout.config import ModelConfig
-    from scout.model import Scout
-
     torch.manual_seed(5)
     config = ModelConfig(vocab_size=2048, n_layers=3, tie_embeddings=tie, rope_theta=50000.0, norm_eps=1e-5)
     ours = Scout(config).to(dtype)
@@ -145,9 +141,6 @@ def test_model_matches_transformers(dtype, tie):
 
 
 def test_loss_matches_transformers():
-    from scout.config import ModelConfig
-    from scout.model import Scout
-
     torch.manual_seed(6)
     config = ModelConfig(vocab_size=2048, n_layers=2)
     ours = Scout(config)
@@ -165,10 +158,6 @@ def test_loss_matches_transformers():
 
 
 def test_greedy_generation_matches_transformers():
-    from scout.config import ModelConfig
-    from scout.generate import generate
-    from scout.model import Scout
-
     torch.manual_seed(7)
     config = ModelConfig(vocab_size=2048, n_layers=3)
     ours = Scout(config)

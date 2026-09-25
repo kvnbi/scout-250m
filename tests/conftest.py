@@ -68,7 +68,7 @@ class Server:
 
         self.httpd = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         self.url = f"http://127.0.0.1:{self.httpd.server_address[1]}/"
-        threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
+        threading.Thread(target=self.httpd.serve_forever, args=(0.01,), daemon=True).start()
 
     def close(self):
         self.httpd.shutdown()

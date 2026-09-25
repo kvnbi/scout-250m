@@ -23,16 +23,6 @@ LAYER_NAMES = (
 )
 
 
-
-@pytest.fixture(scope="module")
-def small32():
-    yield from unchanged(make())
-
-
-@pytest.fixture(scope="module")
-def small64():
-    yield from unchanged(make(dtype=torch.float64))
-
 def make(config=SMALL, dtype=torch.float32, seed=0):
     torch.manual_seed(seed)
     model = Scout(config).to(dtype)
@@ -46,6 +36,16 @@ def make(config=SMALL, dtype=torch.float32, seed=0):
 def tokens(batch, seq, vocab=512, seed=1):
     generator = torch.Generator().manual_seed(seed)
     return torch.randint(0, vocab, (batch, seq), generator=generator)
+
+
+@pytest.fixture(scope="module")
+def small32():
+    yield from unchanged(make())
+
+
+@pytest.fixture(scope="module")
+def small64():
+    yield from unchanged(make(dtype=torch.float64))
 
 
 def test_state_dict_names_match_qwen3(small32):

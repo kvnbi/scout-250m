@@ -10,55 +10,50 @@ from scout.model import Scout
 TRUNCATED_STD_FACTOR = 0.98658
 
 
-@pytest.fixture
-def full(full_model):
-    return full_model
-
-
 def measured_std(weight):
     return weight.detach().double().std().item()
 
 
 @pytest.mark.parametrize("name", ["q_proj", "k_proj", "v_proj"])
-def test_attention_input_projections_use_base_std(full, name):
-    weight = getattr(full.model.layers[5].self_attn, name).weight
+def test_attention_input_projections_use_base_std(full_model, name):
+    weight = getattr(full_model.model.layers[5].self_attn, name).weight
     assert measured_std(weight) == pytest.approx(0.02 * TRUNCATED_STD_FACTOR, rel=0.03)
 
 
 @pytest.mark.parametrize("name", ["gate_proj", "up_proj"])
-def test_mlp_input_projections_use_base_std(full, name):
-    weight = getattr(full.model.layers[5].mlp, name).weight
+def test_mlp_input_projections_use_base_std(full_model, name):
+    weight = getattr(full_model.model.layers[5].mlp, name).weight
     assert measured_std(weight) == pytest.approx(0.02 * TRUNCATED_STD_FACTOR, rel=0.03)
 
 
 @pytest.mark.parametrize("path", ["self_attn.o_proj", "mlp.down_proj"])
-def test_residual_output_projections_are_scaled_by_depth(full, path):
-    weight = full.model.layers[5].get_submodule(path).weight
+def test_residual_output_projections_are_scaled_by_depth(full_model, path):
+    weight = full_model.model.layers[5].get_submodule(path).weight
     expected = 0.02 / math.sqrt(2 * 26) * TRUNCATED_STD_FACTOR
     assert measured_std(weight) == pytest.approx(expected, rel=0.03)
 
 
-def test_embeddings_use_base_std_and_stay_tied(full):
-    assert full.lm_head.weight is full.model.embed_tokens.weight
-    assert measured_std(full.model.embed_tokens.weight) == pytest.approx(0.02 * TRUNCATED_STD_FACTOR, rel=0.03)
+def test_embeddings_use_base_std_and_stay_tied(full_model):
+    assert full_model.lm_head.weight is full_model.model.embed_tokens.weight
+    assert measured_std(full_model.model.embed_tokens.weight) == pytest.approx(0.02 * TRUNCATED_STD_FACTOR, rel=0.03)
 
 
-def test_every_weight_is_truncated_at_three_std(full):
+def test_every_weight_is_truncated_at_three_std(full_model):
     residual_std = 0.02 / math.sqrt(2 * 26)
-    for name, parameter in full.named_parameters():
+    for name, parameter in full_model.named_parameters():
         if parameter.dim() == 2:
             limit = 3 * (residual_std if name.endswith(("o_proj.weight", "down_proj.weight")) else 0.02)
             assert parameter.abs().max().item() <= limit, name
 
 
-def test_every_norm_starts_at_one(full):
-    for name, parameter in full.named_parameters():
+def test_every_norm_starts_at_one(full_model):
+    for name, parameter in full_model.named_parameters():
         if parameter.dim() == 1:
             assert torch.equal(parameter, torch.ones_like(parameter)), name
 
 
-def test_weights_have_zero_mean(full):
-    for name, parameter in full.named_parameters():
+def test_weights_have_zero_mean(full_model):
+    for name, parameter in full_model.named_parameters():
         if parameter.dim() == 2:
             values = parameter.detach().double()
             standard_error = values.std().item() / math.sqrt(values.numel())
@@ -130,11 +125,11 @@ def test_initial_loss_is_close_to_uniform():
     assert math.log(32768) <= loss <= math.log(32768) + 0.4
 
 
-def test_residual_stream_stays_small_through_depth(full):
+def test_residual_stream_stays_small_through_depth(full_model):
     ids = torch.randint(0, 32768, (1, 128), generator=torch.Generator().manual_seed(0))
     with torch.no_grad():
-        h = full.model.embed_tokens(ids)
-        cos, sin = full.model.rotary_emb(torch.arange(128)[None], h.dtype)
-        for layer in full.model.layers:
+        h = full_model.model.embed_tokens(ids)
+        cos, sin = full_model.model.rotary_emb(torch.arange(128)[None], h.dtype)
+        for layer in full_model.model.layers:
             h = layer(h, cos, sin)
     assert h.pow(2).mean().sqrt().item() < 0.5
