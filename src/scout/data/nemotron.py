@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import gzip
-import io
 import json
 import random
 import re
@@ -10,7 +9,6 @@ import sys
 from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import BinaryIO
 
 from compression import zstd
 
@@ -90,16 +88,15 @@ def select_files(
     return chosen
 
 
-def iter_records(stream: BinaryIO) -> Iterator[dict[str, str]]:
-    with zstd.ZstdFile(stream) as decompressed:
-        for number, line in enumerate(io.TextIOWrapper(decompressed, encoding="utf-8", newline="\n"), start=1):
+def iter_records(path: Path) -> Iterator[dict[str, str]]:
+    with zstd.ZstdFile(path) as lines:
+        for number, line in enumerate(lines, start=1):
             if not line.strip():
                 continue
             record = json.loads(line)
-            text = record.get("text")
-            if not isinstance(text, str):
-                raise ValueError(f"record {number} has no text")
-            yield {"text": text, "url": record.get("url") or "", "id": record.get("warc_record_id") or ""}
+            if not isinstance(record, dict) or not isinstance(record.get("text"), str):
+                raise ValueError(f"{path} line {number} has no text")
+            yield {"text": record["text"], "url": record.get("url") or "", "id": record.get("warc_record_id") or ""}
 
 
 def parse_partitions(text: str) -> list[tuple[str, str]]:

@@ -1,6 +1,5 @@
 import gzip
 import hashlib
-import io
 import json
 
 import pytest
@@ -136,24 +135,30 @@ RECORDS = [
 ]
 
 
+def write(path, blob):
+    path.write_bytes(blob)
+    return path
+
+
 @pytest.mark.parametrize("frames", [1, 3])
-def test_streams_records_from_zstd(frames):
-    records = list(iter_records(io.BytesIO(encode(RECORDS, frames))))
+def test_streams_records_from_zstd(frames, tmp_path):
+    records = list(iter_records(write(tmp_path / "f.jsonl.zstd", encode(RECORDS, frames))))
     assert records == [{"text": r["text"], "url": r["url"], "id": r["warc_record_id"]} for r in RECORDS]
 
 
-def test_unicode_line_separators_stay_inside_records():
+def test_unicode_line_separators_stay_inside_records(tmp_path):
     text = "one\u2028two\u2029three\x85four"
     blob = encode([{"text": text, "language": "eng", "warc_record_id": "a", "url": None}])
-    assert list(iter_records(io.BytesIO(blob))) == [{"text": text, "url": "", "id": "a"}]
+    assert list(iter_records(write(tmp_path / "f.jsonl.zstd", blob))) == [{"text": text, "url": "", "id": "a"}]
 
 
-def test_skips_blank_lines_and_rejects_records_without_text():
-    blob = zstd.compress(b'{"text": "ok"}\n\n{"url": "x"}\n')
-    stream = iter_records(io.BytesIO(blob))
-    assert next(stream)["text"] == "ok"
-    with pytest.raises(ValueError):
-        next(stream)
+@pytest.mark.parametrize("line", [b'{"url": "x"}', b'{"text": null}', b'["text"]'])
+def test_skips_blank_lines_and_rejects_records_without_text(line, tmp_path):
+    blob = zstd.compress(b'{"text": "ok"}\n\n' + line + b"\n")
+    records = iter_records(write(tmp_path / "f.jsonl.zstd", blob))
+    assert next(records)["text"] == "ok"
+    with pytest.raises(ValueError, match="line 3"):
+        next(records)
 
 
 def test_command_line_downloads_a_selection(serve, tmp_path):
@@ -175,8 +180,7 @@ def test_command_line_downloads_a_selection(serve, tmp_path):
     assert selection["manifest_sha256"] == hashlib.sha256(files[MANIFEST_PATH]).hexdigest()
     for path in selection["files"]:
         local = out / path.removeprefix("contrib/Nemotron/Nemotron-CC/data-jsonl/")
-        with open(local, "rb") as stream:
-            assert [r["id"] for r in iter_records(stream)] == [path]
+        assert [r["id"] for r in iter_records(local)] == [path]
     first_run = [p for p, _ in server.requests]
     assert main(args + ["--base-url", server.url]) == 0
     assert [p for p, _ in server.requests] == first_run

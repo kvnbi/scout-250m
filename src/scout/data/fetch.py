@@ -23,11 +23,8 @@ _NEXT_LINK = re.compile(r'<([^>]+)>;\s*rel="next"')
 
 
 def sha256_of(path: Path) -> str:
-    digest = hashlib.sha256()
     with open(path, "rb") as stream:
-        for block in iter(lambda: stream.read(1 << 20), b""):
-            digest.update(block)
-    return digest.hexdigest()
+        return hashlib.file_digest(stream, "sha256").hexdigest()
 
 
 def download(url: str, destination: Path, sha256: str | None = None, timeout: float = 60.0) -> Path:

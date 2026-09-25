@@ -1,8 +1,10 @@
+import hashlib
 import http.client
 import json
 
 import pytest
 
+import scout.data.fetch
 from scout.data.fetch import (
     HubFile,
     download,
@@ -49,15 +51,13 @@ def test_truncated_transfer_keeps_the_partial_for_resuming(serve, tmp_path):
 
 
 def test_connection_cut_mid_copy_is_a_resumable_error(serve, tmp_path, monkeypatch):
-    import scout.data.fetch as fetch
-
     server = serve({"f.bin": BODY})
 
     def cut(source, target, length):
         target.write(source.read(3000))
         raise http.client.IncompleteRead(b"")
 
-    monkeypatch.setattr(fetch.shutil, "copyfileobj", cut)
+    monkeypatch.setattr(scout.data.fetch.shutil, "copyfileobj", cut)
     with pytest.raises(OSError):
         download(server.url + "f.bin", tmp_path / "f.bin")
     monkeypatch.undo()
@@ -82,8 +82,6 @@ def test_oversized_partial_is_discarded(serve, tmp_path):
 
 
 def test_complete_partial_is_confirmed_by_sha256_when_the_size_is_hidden(serve, tmp_path):
-    import hashlib
-
     server = serve({"f.bin": BODY}, range_on_416=False)
     (tmp_path / "f.bin.part").write_bytes(BODY)
     assert download(server.url + "f.bin", tmp_path / "f.bin", sha256=hashlib.sha256(BODY).hexdigest()).read_bytes() == BODY
@@ -91,8 +89,6 @@ def test_complete_partial_is_confirmed_by_sha256_when_the_size_is_hidden(serve, 
 
 
 def test_unconfirmable_partial_is_downloaded_afresh(serve, tmp_path):
-    import hashlib
-
     server = serve({"f.bin": BODY}, range_on_416=False)
     (tmp_path / "f.bin.part").write_bytes(b"y" * len(BODY))
     got = download_with_retries(server.url + "f.bin", tmp_path / "f.bin", 2, 0.0, hashlib.sha256(BODY).hexdigest())
@@ -130,8 +126,6 @@ def test_existing_file_is_not_downloaded_again(serve, tmp_path):
 
 
 def test_verifies_sha256_and_discards_corrupt_files(serve, tmp_path):
-    import hashlib
-
     good = hashlib.sha256(BODY).hexdigest()
     server = serve({"f.bin": BODY})
     assert download(server.url + "f.bin", tmp_path / "ok.bin", sha256=good).read_bytes() == BODY
@@ -142,8 +136,6 @@ def test_verifies_sha256_and_discards_corrupt_files(serve, tmp_path):
 
 
 def test_sha256_is_checked_after_a_resume(serve, tmp_path):
-    import hashlib
-
     server = serve({"f.bin": BODY})
     (tmp_path / "f.bin.part").write_bytes(b"x" * 1000)
     with pytest.raises(OSError):
@@ -152,8 +144,6 @@ def test_sha256_is_checked_after_a_resume(serve, tmp_path):
 
 
 def test_sha256_of_matches_hashlib(tmp_path):
-    import hashlib
-
     path = tmp_path / "f.bin"
     path.write_bytes(BODY * 50)
     assert sha256_of(path) == hashlib.sha256(BODY * 50).hexdigest()
