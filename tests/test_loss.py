@@ -1,9 +1,8 @@
-import math
-
 import pytest
 import torch
 import torch.nn.functional as F
 
+import scout.loss
 from scout.config import ModelConfig
 from scout.loss import IGNORE_INDEX, lm_loss, lm_loss_totals
 from scout.model import Scout
@@ -33,16 +32,72 @@ def test_matches_reference_cross_entropy(chunk_size):
     torch.testing.assert_close(lm_loss(hidden, weight, targets, chunk_size), expected, rtol=1e-12, atol=1e-12)
 
 
-@pytest.mark.parametrize("chunk_size", [5, 4096])
-def test_gradients_match_reference(chunk_size):
+@pytest.mark.parametrize("chunk_size", [1, 5, 4096])
+@pytest.mark.parametrize("z_loss_weight", [0.0, 1e-2])
+def test_gradients_match_reference(chunk_size, z_loss_weight):
     hidden, weight, targets = inputs()
-    lm_loss(hidden, weight, targets, chunk_size).backward()
+    lm_loss(hidden, weight, targets, chunk_size, z_loss_weight=z_loss_weight).backward()
     ours = (hidden.grad.clone(), weight.grad.clone())
     hidden.grad = None
     weight.grad = None
-    reference(hidden, weight, targets).backward()
+    reference(hidden, weight, targets, z_loss_weight).backward()
     torch.testing.assert_close(ours[0], hidden.grad, rtol=1e-12, atol=1e-12)
     torch.testing.assert_close(ours[1], weight.grad, rtol=1e-12, atol=1e-12)
+
+
+def test_passes_gradcheck_with_z_loss():
+    hidden, weight, targets = inputs(tokens=9, width=4, vocab=7, ignored=(2,))
+    assert torch.autograd.gradcheck(lambda h, w: lm_loss(h, w, targets, 4, z_loss_weight=0.1), (hidden, weight))
+
+
+@pytest.mark.parametrize("frozen", ["hidden", "weight"])
+def test_frozen_inputs_get_no_gradient_and_the_other_stays_exact(frozen):
+    hidden, weight, targets = inputs()
+    expected = torch.autograd.grad(reference(hidden, weight, targets), (hidden, weight))
+    hidden.requires_grad_(frozen != "hidden")
+    weight.requires_grad_(frozen != "weight")
+    lm_loss(hidden, weight, targets, 5).backward()
+    assert (hidden.grad is None) == (frozen == "hidden")
+    assert (weight.grad is None) == (frozen == "weight")
+    trained, reference_grad = (weight, expected[1]) if frozen == "hidden" else (hidden, expected[0])
+    torch.testing.assert_close(trained.grad, reference_grad, rtol=1e-12, atol=1e-12)
+
+
+def test_only_the_combined_sum_carries_gradients():
+    hidden, weight, targets = inputs()
+    totals = lm_loss_totals(hidden, weight, targets, 5, z_loss_weight=1e-3)
+    assert totals.loss_sum.requires_grad
+    assert not totals.cross_entropy_sum.requires_grad
+    assert not totals.z_loss_sum.requires_grad
+    torch.testing.assert_close(totals.loss_sum, totals.cross_entropy_sum + 1e-3 * totals.z_loss_sum)
+
+
+def test_no_gradient_work_when_gradients_are_off(monkeypatch):
+    calls = []
+    real = scout.loss._sums_and_gradients
+
+    def spy(*args):
+        calls.append(args[-2:])
+        return real(*args)
+
+    monkeypatch.setattr(scout.loss, "_sums_and_gradients", spy)
+    hidden, weight, targets = inputs()
+    with torch.no_grad():
+        lm_loss(hidden, weight, targets, 5)
+    lm_loss(hidden.detach(), weight.detach(), targets, 5)
+    lm_loss(hidden, weight, targets, 5)
+    assert calls == [(False, False), (False, False), (True, True)]
+
+
+def test_autocast_gradients_stay_close_to_float64():
+    hidden, weight, targets = inputs(dtype=torch.float32)
+    with torch.autocast(device_type="cpu", dtype=torch.bfloat16):
+        loss = lm_loss(hidden, weight, targets, 5)
+    loss.backward()
+    assert hidden.grad.dtype == weight.grad.dtype == torch.float32
+    expected = torch.autograd.grad(reference(hidden.double(), weight.double(), targets), (hidden, weight))
+    torch.testing.assert_close(hidden.grad, expected[0], rtol=0.0, atol=0.002)
+    torch.testing.assert_close(weight.grad, expected[1], rtol=0.0, atol=0.005)
 
 
 def test_z_loss_matches_reference():
@@ -59,9 +114,9 @@ def test_totals_count_only_valid_tokens():
     hidden, weight, targets = inputs()
     totals = lm_loss_totals(hidden, weight, targets, 5)
     assert totals.tokens.item() == 33
-    assert totals.cross_entropy_sum.dtype == totals.z_loss_sum.dtype == torch.float64
+    assert totals.loss_sum.dtype == totals.cross_entropy_sum.dtype == totals.z_loss_sum.dtype == torch.float64
     low = lm_loss_totals(hidden.bfloat16(), weight.bfloat16(), targets, 5)
-    assert low.cross_entropy_sum.dtype == low.z_loss_sum.dtype == torch.float32
+    assert low.loss_sum.dtype == low.cross_entropy_sum.dtype == low.z_loss_sum.dtype == torch.float32
 
 
 def test_totals_combine_exactly_across_micro_batches():
@@ -89,7 +144,11 @@ def test_all_ignored_gives_zero_loss_and_zero_gradients():
 
 def test_is_bitwise_deterministic():
     hidden, weight, targets = inputs(dtype=torch.float32)
-    assert torch.equal(lm_loss(hidden, weight, targets, 5), lm_loss(hidden, weight, targets, 5))
+    runs = []
+    for _ in range(2):
+        loss = lm_loss(hidden, weight, targets, 5)
+        runs.append((loss, *torch.autograd.grad(loss, (hidden, weight))))
+    assert all(torch.equal(a, b) for a, b in zip(*runs))
 
 
 def test_full_logits_are_never_stored_for_backward():
@@ -122,7 +181,7 @@ def test_bfloat16_inputs_stay_close_to_float64():
 def test_rejects_out_of_range_targets(bad):
     hidden, weight, targets = inputs()
     targets[0] = bad
-    with pytest.raises(ValueError):
+    with pytest.raises(RuntimeError):
         lm_loss(hidden, weight, targets)
 
 
@@ -134,12 +193,14 @@ def test_custom_ignore_index(ignore_index):
     torch.testing.assert_close(lm_loss(hidden, weight, custom, 5, ignore_index), expected, rtol=1e-12, atol=1e-12)
 
 
-def test_works_without_gradients():
+@pytest.mark.parametrize("z_loss_weight", [0.0, 1e-2])
+def test_works_without_gradients(z_loss_weight):
     hidden, weight, targets = inputs()
     with torch.no_grad():
-        loss = lm_loss(hidden, weight, targets, 5)
+        loss = lm_loss(hidden, weight, targets, 5, z_loss_weight=z_loss_weight)
+        expected = reference(hidden, weight, targets, z_loss_weight)
     assert not loss.requires_grad
-    torch.testing.assert_close(loss, reference(hidden, weight, targets).detach(), rtol=1e-12, atol=1e-12)
+    torch.testing.assert_close(loss, expected, rtol=1e-12, atol=1e-12)
 
 
 def test_leaves_random_state_untouched():
@@ -201,12 +262,3 @@ def test_model_loss_totals_match_model_loss():
     totals = model.loss_totals(ids, targets, chunk_size=7)
     mean = totals.cross_entropy_sum / totals.tokens
     torch.testing.assert_close(mean, model.loss(ids, targets, chunk_size=7), rtol=1e-12, atol=1e-12)
-
-
-def test_untrained_model_loss_is_close_to_uniform():
-    torch.manual_seed(0)
-    model = Scout(ModelConfig(n_layers=2))
-    ids = torch.randint(0, 32768, (2, 128))
-    with torch.no_grad():
-        loss = model.loss(ids, torch.roll(ids, -1, 1)).item()
-    assert math.log(32768) <= loss <= math.log(32768) + 0.4

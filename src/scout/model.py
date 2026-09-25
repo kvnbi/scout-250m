@@ -84,8 +84,10 @@ class Scout(nn.Module):
         targets: torch.Tensor,
         positions: torch.Tensor | None = None,
         chunk_size: int = 4096,
+        z_loss_weight: float = 0.0,
     ) -> LossTotals:
-        return lm_loss_totals(self.hidden_states(input_ids, positions), self.lm_head.weight, targets, chunk_size)
+        hidden = self.hidden_states(input_ids, positions)
+        return lm_loss_totals(hidden, self.lm_head.weight, targets, chunk_size, IGNORE_INDEX, z_loss_weight)
 
     def hidden_states(self, input_ids: torch.Tensor, positions: torch.Tensor | None = None) -> torch.Tensor:
         batch, seq = self._check_input_ids(input_ids)
