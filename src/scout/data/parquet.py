@@ -11,7 +11,7 @@ def iter_parquet(
 ) -> Iterator[dict[str, object]]:
     if text_column is not None and text_column not in columns:
         raise ValueError(f"columns must include {text_column}")
-    with pq.ParquetFile(path) as parquet:
+    with pq.ParquetFile(path, pre_buffer=False) as parquet:
         missing = [column for column in columns if column not in parquet.schema_arrow.names]
         if missing:
             raise ValueError(f"{path} lacks columns {missing}")

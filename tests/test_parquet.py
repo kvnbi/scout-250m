@@ -1,3 +1,5 @@
+import random
+
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
@@ -48,3 +50,16 @@ def test_rejects_rows_without_text(tmp_path):
     assert next(rows)["id"] == "1"
     with pytest.raises(ValueError):
         next(rows)
+
+
+def test_holds_one_row_group_in_memory_at_a_time(tmp_path):
+    rng = random.Random(0)
+    texts = [rng.randbytes(1000).hex() for _ in range(2000)]
+    path = tmp_path / "f.parquet"
+    pq.write_table(pa.table({"text": texts}), path, row_group_size=100, compression="none")
+    base = pa.total_allocated_bytes()
+    peak = 0
+    for row in iter_parquet(path, ("text",), batch_size=50):
+        peak = max(peak, pa.total_allocated_bytes() - base)
+    assert row["text"] == texts[-1]
+    assert peak < path.stat().st_size / 2
