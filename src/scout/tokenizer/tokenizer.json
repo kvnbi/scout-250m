@@ -14,7 +14,7 @@
     },
     {
       "id": 32737,
-      "content": "<|reserved_1|>",
+      "content": "<|pad|>",
       "single_word": false,
       "lstrip": false,
       "rstrip": false,
@@ -23,7 +23,7 @@
     },
     {
       "id": 32738,
-      "content": "<|reserved_2|>",
+      "content": "<|question|>",
       "single_word": false,
       "lstrip": false,
       "rstrip": false,
@@ -32,7 +32,7 @@
     },
     {
       "id": 32739,
-      "content": "<|reserved_3|>",
+      "content": "<|/question|>",
       "single_word": false,
       "lstrip": false,
       "rstrip": false,
@@ -41,7 +41,7 @@
     },
     {
       "id": 32740,
-      "content": "<|reserved_4|>",
+      "content": "<|plan|>",
       "single_word": false,
       "lstrip": false,
       "rstrip": false,
@@ -50,7 +50,7 @@
     },
     {
       "id": 32741,
-      "content": "<|reserved_5|>",
+      "content": "<|/plan|>",
       "single_word": false,
       "lstrip": false,
       "rstrip": false,
@@ -59,7 +59,7 @@
     },
     {
       "id": 32742,
-      "content": "<|reserved_6|>",
+      "content": "<|search|>",
       "single_word": false,
       "lstrip": false,
       "rstrip": false,
@@ -68,7 +68,7 @@
     },
     {
       "id": 32743,
-      "content": "<|reserved_7|>",
+      "content": "<|/search|>",
       "single_word": false,
       "lstrip": false,
       "rstrip": false,
@@ -77,7 +77,7 @@
     },
     {
       "id": 32744,
-      "content": "<|reserved_8|>",
+      "content": "<|passage|>",
       "single_word": false,
       "lstrip": false,
       "rstrip": false,
@@ -86,7 +86,7 @@
     },
     {
       "id": 32745,
-      "content": "<|reserved_9|>",
+      "content": "<|/passage|>",
       "single_word": false,
       "lstrip": false,
       "rstrip": false,
@@ -95,7 +95,7 @@
     },
     {
       "id": 32746,
-      "content": "<|reserved_10|>",
+      "content": "<|note|>",
       "single_word": false,
       "lstrip": false,
       "rstrip": false,
@@ -104,7 +104,7 @@
     },
     {
       "id": 32747,
-      "content": "<|reserved_11|>",
+      "content": "<|/note|>",
       "single_word": false,
       "lstrip": false,
       "rstrip": false,
@@ -113,7 +113,7 @@
     },
     {
       "id": 32748,
-      "content": "<|reserved_12|>",
+      "content": "<|answer|>",
       "single_word": false,
       "lstrip": false,
       "rstrip": false,
@@ -122,7 +122,7 @@
     },
     {
       "id": 32749,
-      "content": "<|reserved_13|>",
+      "content": "<|/answer|>",
       "single_word": false,
       "lstrip": false,
       "rstrip": false,
@@ -131,7 +131,7 @@
     },
     {
       "id": 32750,
-      "content": "<|reserved_14|>",
+      "content": "<|decline|>",
       "single_word": false,
       "lstrip": false,
       "rstrip": false,

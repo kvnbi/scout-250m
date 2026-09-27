@@ -8,15 +8,8 @@ from tokenizers import Tokenizer, pre_tokenizers
 
 import scout.tokenizer.train
 from scout.config import ModelConfig
-from scout.tokenizer.train import (
-    END_OF_TEXT,
-    TOKENIZER_FILE,
-    bytes_per_token,
-    main,
-    new_tokenizer,
-    special_tokens,
-    train_tokenizer,
-)
+from scout.tokenizer.markers import END_OF_TEXT, NAMED, PAD, special_tokens
+from scout.tokenizer.train import TOKENIZER_FILE, bytes_per_token, main, new_tokenizer, train_tokenizer
 
 SMALL = ModelConfig(vocab_size=512)
 
@@ -139,9 +132,12 @@ def test_special_tokens_must_land_on_the_reserved_ids(monkeypatch):
 
 
 def test_special_token_names():
-    assert special_tokens(3) == ["<|endoftext|>", "<|reserved_1|>", "<|reserved_2|>"]
+    names = special_tokens(32)
+    assert names[:2] == [END_OF_TEXT, PAD] and names[: len(NAMED)] == list(NAMED)
+    assert names[len(NAMED) :] == [f"<|reserved_{index}|>" for index in range(len(NAMED), 32)]
+    assert len(set(names)) == 32
     with pytest.raises(ValueError):
-        special_tokens(0)
+        special_tokens(len(NAMED) - 1)
 
 
 def test_bytes_per_token_counts_utf8_bytes(small):

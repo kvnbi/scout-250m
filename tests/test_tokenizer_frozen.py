@@ -5,7 +5,8 @@ from test_tokenizer_train import TRICKY
 
 from scout.config import ModelConfig
 from scout.tokenizer.frozen import CORE_SHA256, FILE_SHA256, TOKENIZER_PATH, core_sha256, load_tokenizer
-from scout.tokenizer.train import END_OF_TEXT, new_tokenizer, special_tokens
+from scout.tokenizer.markers import END_OF_TEXT, special_tokens
+from scout.tokenizer.train import new_tokenizer
 
 
 def test_file_is_unchanged():

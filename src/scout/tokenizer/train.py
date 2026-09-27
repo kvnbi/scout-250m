@@ -9,19 +9,13 @@ from pathlib import Path
 from tokenizers import Regex, Tokenizer, decoders, models, pre_tokenizers, trainers
 
 from scout.config import ModelConfig
+from scout.tokenizer.markers import special_tokens
 from scout.tokenizer.sample import iter_sample
 
 SPLIT_PATTERN = (
     r"(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\r\n\p{L}\p{N}]?\p{L}+|\p{N}| ?[^\s\p{L}\p{N}]+[\r\n]*|\s*[\r\n]+|\s+(?!\S)|\s+"
 )
-END_OF_TEXT = "<|endoftext|>"
 TOKENIZER_FILE = "tokenizer.json"
-
-
-def special_tokens(count: int) -> list[str]:
-    if count < 1:
-        raise ValueError("at least one reserved slot is needed for the end of text token")
-    return [END_OF_TEXT] + [f"<|reserved_{index}|>" for index in range(1, count)]
 
 
 def new_tokenizer() -> Tokenizer:
