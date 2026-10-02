@@ -96,6 +96,9 @@ def train(
     checkpoint_path: Path | None = None,
     checkpoint_every: int = 0,
     group: dist.ProcessGroup | None = None,
+    evaluate: Callable[[Scout], dict[str, float | int]] | None = None,
+    evaluate_every: int = 0,
+    on_evaluate: Callable[[int, dict[str, float | int]], None] | None = None,
 ) -> int:
     stop = settings.total_steps if stop_step is None else stop_step
     if not 0 <= start_step <= stop <= settings.total_steps:
@@ -117,6 +120,11 @@ def train(
                     "lrs": [optimizer.param_groups[0]["lr"] for optimizer in optimizers],
                 },
             )
+        evaluating_now = evaluate is not None and evaluate_every and rank(group) == 0
+        if evaluating_now and (done % evaluate_every == 0 or done == stop):
+            results = evaluate(model)
+            if on_evaluate is not None:
+                on_evaluate(done, results)
         saving = checkpoint_path is not None and checkpoint_every and rank(group) == 0
         if saving and (done % checkpoint_every == 0 or done == stop):
             save_checkpoint(checkpoint_path, model, optimizers, done)
