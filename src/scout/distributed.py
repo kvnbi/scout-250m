@@ -27,7 +27,7 @@ def broadcast_parameters(model: torch.nn.Module, group: dist.ProcessGroup | None
 def reduce_gradients(
     parameters: Iterable[torch.nn.Parameter], group: dist.ProcessGroup | None = None, bucket_bytes: int = BUCKET_BYTES
 ) -> None:
-    parameters = list(parameters)
+    parameters = [p for p in parameters if p.requires_grad]
     world = world_size(group)
     if world == 1 or not parameters:
         return

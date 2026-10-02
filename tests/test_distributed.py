@@ -54,13 +54,20 @@ def reduction_worker(index, world, init, folder, bucket_bytes):
     dist.all_gather = lambda *args, **kwargs: (calls.append(1), real(*args, **kwargs))[1]
     reduce_gradients(parameters, bucket_bytes=bucket_bytes)
     dist.all_gather = real
+    frozen = torch.nn.Parameter(torch.zeros(4), requires_grad=False)
+    live = torch.nn.Parameter(torch.zeros(4))
+    live.grad = torch.full((4,), float(index + 1))
+    reduce_gradients([live, frozen])
+    kept_frozen_alone = frozen.grad is None and torch.equal(live.grad, torch.full((4,), world * (world + 1) / 2))
+    reduce_gradients([frozen])
+    kept_frozen_alone = kept_frozen_alone and frozen.grad is None
     mixed = [torch.nn.Parameter(torch.zeros(3)), torch.nn.Parameter(torch.zeros(3, dtype=torch.float64))]
     try:
         reduce_gradients(mixed)
         refused = False
     except ValueError:
         refused = True
-    torch.save({"grads": [p.grad for p in parameters], "calls": len(calls), "refused": refused}, f"{folder}/reduced{index}.pt")
+    torch.save({"grads": [p.grad for p in parameters], "calls": len(calls), "refused": refused, "frozen": kept_frozen_alone}, f"{folder}/reduced{index}.pt")
     dist.destroy_process_group()
 
 
@@ -87,7 +94,7 @@ def test_reduction_is_the_rank_ordered_sum_and_buckets_split_where_they_should(t
             got = torch.load(folder / f"reduced{index}.pt", weights_only=True)
             assert all(torch.equal(a, b) for a, b in zip(got["grads"], expected)), (bucket_bytes, index)
             assert got["calls"] == buckets, (bucket_bytes, index)
-            assert got["refused"]
+            assert got["refused"] and got["frozen"]
 
 
 def test_the_rank_order_is_what_makes_it_exact_not_luck():
