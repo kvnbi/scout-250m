@@ -39,10 +39,17 @@ class Attention(nn.Module):
         self.k_norm = RMSNorm(head_dim, eps) if qk_norm else nn.Identity()
 
     def forward(
-        self, x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor, cache: LayerCache | None = None
+        self,
+        x: torch.Tensor,
+        cos: torch.Tensor,
+        sin: torch.Tensor,
+        cache: LayerCache | None = None,
+        mask: torch.Tensor | None = None,
     ) -> torch.Tensor:
         if x.dim() != 3 or x.shape[-1] != self.d_model:
             raise ValueError(f"expected input of shape (batch, seq, {self.d_model}), got {tuple(x.shape)}")
+        if cache is not None and mask is not None:
+            raise ValueError("a document mask cannot be combined with a cache")
         batch, seq, _ = x.shape
         for name, table in (("cos", cos), ("sin", sin)):
             if table.dim() != 3 or table.shape[0] not in (1, batch) or table.shape[1:] != (seq, self.head_dim):
@@ -55,8 +62,12 @@ class Attention(nn.Module):
         q = apply_rotary(q, cos, sin)
         k = apply_rotary(k, cos, sin)
         grouped = self.n_query_heads != self.n_kv_heads
-        if cache is None:
+        if cache is None and mask is None:
             out = F.scaled_dot_product_attention(q, k, v, is_causal=True, scale=self.scaling, enable_gqa=grouped)
+        elif cache is None:
+            out = F.scaled_dot_product_attention(
+                q, k, v, attn_mask=mask[:, None], scale=self.scaling, enable_gqa=grouped
+            )
         else:
             k, v = cache.store(k, v)
             out = F.scaled_dot_product_attention(

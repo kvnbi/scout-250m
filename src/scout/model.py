@@ -10,6 +10,7 @@ from scout.cache import KVCache
 from scout.config import ModelConfig
 from scout.layers import RMSNorm
 from scout.loss import IGNORE_INDEX, LossTotals, lm_loss, lm_loss_totals
+from scout.masking import document_mask
 from scout.rotary import RotaryEmbedding
 
 
@@ -32,11 +33,17 @@ class Backbone(nn.Module):
         self.norm = RMSNorm(config.d_model, config.norm_eps)
         self.rotary_emb = RotaryEmbedding(config.head_dim, config.rope_theta)
 
-    def forward(self, input_ids: torch.Tensor, positions: torch.Tensor, cache: KVCache | None = None) -> torch.Tensor:
+    def forward(
+        self,
+        input_ids: torch.Tensor,
+        positions: torch.Tensor,
+        cache: KVCache | None = None,
+        mask: torch.Tensor | None = None,
+    ) -> torch.Tensor:
         h = self.embed_tokens(input_ids)
         cos, sin = self.rotary_emb(positions, h.dtype)
         for index, layer in enumerate(self.layers):
-            h = layer(h, cos, sin, None if cache is None else cache.layer(index))
+            h = layer(h, cos, sin, None if cache is None else cache.layer(index), mask)
         return self.norm(h)
 
 
@@ -64,8 +71,13 @@ class Scout(nn.Module):
             elif isinstance(module, RMSNorm):
                 nn.init.ones_(module.weight)
 
-    def forward(self, input_ids: torch.Tensor, positions: torch.Tensor | None = None) -> torch.Tensor:
-        return self.lm_head(self.hidden_states(input_ids, positions))
+    def forward(
+        self,
+        input_ids: torch.Tensor,
+        positions: torch.Tensor | None = None,
+        document_ids: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        return self.lm_head(self.hidden_states(input_ids, positions, document_ids))
 
     def loss(
         self,
@@ -74,8 +86,9 @@ class Scout(nn.Module):
         positions: torch.Tensor | None = None,
         chunk_size: int = 4096,
         z_loss_weight: float = 0.0,
+        document_ids: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        hidden = self.hidden_states(input_ids, positions)
+        hidden = self.hidden_states(input_ids, positions, document_ids)
         return lm_loss(hidden, self.lm_head.weight, targets, chunk_size, IGNORE_INDEX, z_loss_weight)
 
     def loss_totals(
@@ -85,17 +98,28 @@ class Scout(nn.Module):
         positions: torch.Tensor | None = None,
         chunk_size: int = 4096,
         z_loss_weight: float = 0.0,
+        document_ids: torch.Tensor | None = None,
     ) -> LossTotals:
-        hidden = self.hidden_states(input_ids, positions)
+        hidden = self.hidden_states(input_ids, positions, document_ids)
         return lm_loss_totals(hidden, self.lm_head.weight, targets, chunk_size, IGNORE_INDEX, z_loss_weight)
 
-    def hidden_states(self, input_ids: torch.Tensor, positions: torch.Tensor | None = None) -> torch.Tensor:
+    def hidden_states(
+        self,
+        input_ids: torch.Tensor,
+        positions: torch.Tensor | None = None,
+        document_ids: torch.Tensor | None = None,
+    ) -> torch.Tensor:
         batch, seq = self._check_input_ids(input_ids)
         if positions is None:
             positions = torch.arange(seq, device=input_ids.device).unsqueeze(0)
         else:
             self._check_positions(positions, batch, seq)
-        return self.model(input_ids, positions)
+        mask = None
+        if document_ids is not None:
+            if tuple(document_ids.shape) != (batch, seq):
+                raise ValueError(f"expected document_ids of shape ({batch}, {seq}), got {tuple(document_ids.shape)}")
+            mask = document_mask(document_ids)
+        return self.model(input_ids, positions, mask=mask)
 
     def forward_cached(
         self,

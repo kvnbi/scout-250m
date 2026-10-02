@@ -27,7 +27,12 @@ class Block(nn.Module):
         self.mlp = SwiGLU(d_model, ffn_hidden)
 
     def forward(
-        self, x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor, cache: LayerCache | None = None
+        self,
+        x: torch.Tensor,
+        cos: torch.Tensor,
+        sin: torch.Tensor,
+        cache: LayerCache | None = None,
+        mask: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        x = x + self.self_attn(self.input_layernorm(x), cos, sin, cache)
+        x = x + self.self_attn(self.input_layernorm(x), cos, sin, cache, mask)
         return x + self.mlp(self.post_attention_layernorm(x))
