@@ -9,7 +9,8 @@ from scout.loss import IGNORE_INDEX
 from scout.masking import document_ids
 from scout.model import Scout
 from scout.optim.groups import build_optimizers
-from scout.optim.schedule import set_learning_rates, wsd_factor
+from scout.train import Batch, TrainSettings
+from scout.train import train as run_training
 
 TINY = ModelConfig(
     vocab_size=64,
@@ -42,23 +43,21 @@ def build(seed):
     return model, build_optimizers(model, matrix_lr=0.02, other_lr=0.01, weight_decay=0.1)
 
 
-def train(model, optimizers, start, stop, autocast=False, accumulate=1, skip_schedule=False):
+def batches():
+    while True:
+        ids, targets = batch()
+        yield Batch(ids, targets, document_ids(ids, EOT))
+
+
+def train(model, optimizers, start, stop, autocast=False, accumulate=1):
     losses = []
-    for step in range(start, stop):
-        if not skip_schedule:
-            set_learning_rates(optimizers, wsd_factor(step, TOTAL, WARMUP, DECAY))
-        for optimizer in optimizers:
-            optimizer.zero_grad()
-        total = 0.0
-        for _ in range(accumulate):
-            ids, targets = batch()
-            with torch.autocast(device_type="cpu", dtype=torch.bfloat16, enabled=autocast):
-                loss = model.loss(ids, targets, document_ids=document_ids(ids, EOT)) / accumulate
-            loss.backward()
-            total += loss.item()
-        for optimizer in optimizers:
-            optimizer.step()
-        losses.append(total)
+    settings = TrainSettings(
+        total_steps=TOTAL, warmup_steps=WARMUP, decay_steps=DECAY, accumulate=accumulate, autocast=autocast
+    )
+    run_training(
+        model, optimizers, batches(), settings, start_step=start, stop_step=stop,
+        on_step=lambda step, metrics: losses.append(metrics["loss"]),
+    )
     return losses
 
 

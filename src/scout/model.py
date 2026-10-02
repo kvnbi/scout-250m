@@ -4,6 +4,7 @@ import math
 
 import torch
 from torch import nn
+from torch.utils.checkpoint import checkpoint
 
 from scout.block import Block
 from scout.cache import KVCache
@@ -32,6 +33,7 @@ class Backbone(nn.Module):
         )
         self.norm = RMSNorm(config.d_model, config.norm_eps)
         self.rotary_emb = RotaryEmbedding(config.head_dim, config.rope_theta)
+        self.gradient_checkpointing = False
 
     def forward(
         self,
@@ -43,7 +45,10 @@ class Backbone(nn.Module):
         h = self.embed_tokens(input_ids)
         cos, sin = self.rotary_emb(positions, h.dtype)
         for index, layer in enumerate(self.layers):
-            h = layer(h, cos, sin, None if cache is None else cache.layer(index), mask)
+            if self.gradient_checkpointing and cache is None:
+                h = checkpoint(layer, h, cos, sin, None, mask, use_reentrant=False, preserve_rng_state=False)
+            else:
+                h = layer(h, cos, sin, None if cache is None else cache.layer(index), mask)
         return self.norm(h)
 
 
@@ -56,6 +61,9 @@ class Scout(nn.Module):
         if self.config.tie_embeddings:
             self.lm_head.weight = self.model.embed_tokens.weight
         self.reset_parameters()
+
+    def set_gradient_checkpointing(self, enabled: bool) -> None:
+        self.model.gradient_checkpointing = enabled
 
     def reset_parameters(self) -> None:
         std = self.config.init_std
