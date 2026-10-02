@@ -6,8 +6,10 @@ from pathlib import Path
 from typing import NamedTuple
 
 import torch
+import torch.distributed as dist
 
 from scout.checkpoint import save_checkpoint
+from scout.distributed import rank, reduce_gradients, world_size
 from scout.loss import IGNORE_INDEX
 from scout.model import Scout
 from scout.optim.schedule import set_learning_rates, wsd_factor
@@ -41,12 +43,20 @@ class TrainSettings:
 
 
 def train_step(
-    model: Scout, optimizers: Sequence[torch.optim.Optimizer], micro_batches: Sequence[Batch], settings: TrainSettings
+    model: Scout,
+    optimizers: Sequence[torch.optim.Optimizer],
+    micro_batches: Sequence[Batch],
+    settings: TrainSettings,
+    group: dist.ProcessGroup | None = None,
 ) -> dict[str, torch.Tensor | int]:
+    device = next(model.parameters()).device
     tokens = sum(int((batch.targets != IGNORE_INDEX).sum()) for batch in micro_batches)
+    if world_size(group) > 1:
+        count = torch.tensor(tokens, device=device)
+        dist.all_reduce(count, group=group)
+        tokens = int(count)
     if tokens == 0:
         raise ValueError("a step needs at least one scored token")
-    device = next(model.parameters()).device
     for optimizer in optimizers:
         optimizer.zero_grad(set_to_none=True)
     cross_entropy = torch.zeros((), device=device)
@@ -62,6 +72,9 @@ def train_step(
             )
         (totals.loss_sum / tokens).backward()
         cross_entropy = cross_entropy + totals.cross_entropy_sum.detach()
+    if world_size(group) > 1:
+        reduce_gradients(model.parameters(), group)
+        dist.all_reduce(cross_entropy, group=group)
     grad_norm = torch.zeros((), device=device)
     if settings.max_grad_norm is not None:
         grad_norm = torch.nn.utils.clip_grad_norm_(
@@ -82,6 +95,7 @@ def train(
     on_step: Callable[[int, dict[str, float | int | list[float]]], None] | None = None,
     checkpoint_path: Path | None = None,
     checkpoint_every: int = 0,
+    group: dist.ProcessGroup | None = None,
 ) -> int:
     stop = settings.total_steps if stop_step is None else stop_step
     if not 0 <= start_step <= stop <= settings.total_steps:
@@ -91,7 +105,7 @@ def train(
         factor = wsd_factor(step, settings.total_steps, settings.warmup_steps, settings.decay_steps)
         set_learning_rates(optimizers, factor)
         micro_batches = [next(batches) for _ in range(settings.accumulate)]
-        result = train_step(model, optimizers, micro_batches, settings)
+        result = train_step(model, optimizers, micro_batches, settings, group)
         done = step + 1
         if on_step is not None:
             on_step(
@@ -103,6 +117,7 @@ def train(
                     "lrs": [optimizer.param_groups[0]["lr"] for optimizer in optimizers],
                 },
             )
-        if checkpoint_path is not None and checkpoint_every and (done % checkpoint_every == 0 or done == stop):
+        saving = checkpoint_path is not None and checkpoint_every and rank(group) == 0
+        if saving and (done % checkpoint_every == 0 or done == stop):
             save_checkpoint(checkpoint_path, model, optimizers, done)
     return stop
