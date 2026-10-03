@@ -99,6 +99,7 @@ def train(
     evaluate: Callable[[Scout], dict[str, float | int]] | None = None,
     evaluate_every: int = 0,
     on_evaluate: Callable[[int, dict[str, float | int]], None] | None = None,
+    on_checkpoint: Callable[[int, Path], None] | None = None,
 ) -> int:
     stop = settings.total_steps if stop_step is None else stop_step
     if not 0 <= start_step <= stop <= settings.total_steps:
@@ -128,4 +129,6 @@ def train(
         saving = checkpoint_path is not None and checkpoint_every and rank(group) == 0
         if saving and (done % checkpoint_every == 0 or done == stop):
             save_checkpoint(checkpoint_path, model, optimizers, done)
+            if on_checkpoint is not None:
+                on_checkpoint(done, checkpoint_path)
     return stop
