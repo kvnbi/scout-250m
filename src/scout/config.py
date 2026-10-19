@@ -100,3 +100,6 @@ class ModelConfig:
             "attention_dropout": 0.0,
             "use_sliding_window": False,
         }
+
+
+PROXY_CONFIG = ModelConfig(d_model=448, n_query_heads=7, n_kv_heads=1, ffn_hidden=1216)
