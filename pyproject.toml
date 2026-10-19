@@ -9,14 +9,14 @@ description = "Scout 250M: a small language model built to research"
 requires-python = ">=3.14"
 license = "Apache-2.0"
 dependencies = [
-    "torch>=2.5",
-    "numpy>=1.26",
-    "pyarrow>=25",
-    "tokenizers>=0.23",
+    "torch>=2.9",
+    "numpy>=2.3.2",
+    "pyarrow>=22",
+    "tokenizers>=0.23.1",
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0"]
+dev = ["pytest>=8.4.2"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
