@@ -1,4 +1,5 @@
 import json
+import shutil
 import threading
 
 import pytest
@@ -11,7 +12,7 @@ from scout.loss import IGNORE_INDEX
 from scout.model import Scout
 from scout.optim.groups import build_optimizers
 from scout.runlog import RunLog, step_logger
-from scout.sync import MANIFEST, CheckpointSync, CommandStore, DirectoryStore, StoreError, fetch_latest
+from scout.sync import MANIFEST, CheckpointSync, CommandStore, DirectoryStore, StoreError, fetch_latest, rclone_store
 from scout.train import Batch, TrainSettings, train
 
 TINY = ModelConfig(
@@ -42,11 +43,18 @@ def command_store(root):
     )
 
 
-@pytest.fixture(params=["directory", "command"])
-def store(request, tmp_path):
+@pytest.fixture(params=["directory", "command", "rclone"])
+def store(request, tmp_path, monkeypatch):
     root = tmp_path / "bucket"
     root.mkdir()
-    return DirectoryStore(root) if request.param == "directory" else command_store(root)
+    if request.param == "directory":
+        return DirectoryStore(root)
+    if request.param == "command":
+        return command_store(root)
+    if shutil.which("rclone") is None:
+        pytest.skip("rclone is not installed")
+    monkeypatch.setenv("RCLONE_CONFIG", str(tmp_path / "rclone.conf"))
+    return rclone_store(f":local:{root}")
 
 
 def test_both_stores_round_trip_overwrite_and_delete(store, tmp_path):
@@ -83,6 +91,50 @@ def test_a_missing_executable_or_a_failing_command_is_an_error_not_a_missing_obj
     slow = CommandStore(["sleep", "5"], ["sleep", "5"], ["sleep", "5"], timeout=0.2)
     with pytest.raises(StoreError, match="timed out"):
         slow.delete("k")
+
+
+def test_rclone_commands_and_exit_codes(tmp_path):
+    store = rclone_store("remote:bucket/run{1}/", flags=["--config", "/x{y}"])
+    values = dict(local="/l", key="k")
+    argv = {name: [part.format(**values) for part in command] for name, command in store.commands.items()}
+    assert argv == {
+        "upload": ["rclone", "--config", "/x{y}", "copyto", "/l", "remote:bucket/run{1}/k"],
+        "download": ["rclone", "--config", "/x{y}", "copyto", "remote:bucket/run{1}/k", "/l"],
+        "delete": ["rclone", "--config", "/x{y}", "deletefile", "remote:bucket/run{1}/k"],
+    }
+    assert store.missing_codes == (3, 4)
+    assert rclone_store("remote:a").timeout is None and rclone_store("remote:a", timeout=5.0).timeout == 5.0
+
+
+def exiting_store(tmp_path, delete_code):
+    root = tmp_path / "bucket"
+    root.mkdir(exist_ok=True)
+    return CommandStore(
+        upload=["sh", "-c", "exit 4"],
+        download=["true"],
+        delete=["sh", "-c", f'test -e "{root}/{{key}}" || exit {delete_code}; rm "{root}/{{key}}"'],
+        missing_codes=(4,),
+    )
+
+
+def test_deleting_a_missing_object_succeeds_only_for_the_declared_codes(tmp_path):
+    exiting_store(tmp_path, 4).delete("gone")
+    with pytest.raises(StoreError, match="code 9"):
+        exiting_store(tmp_path, 9).delete("gone")
+    write(tmp_path / "bucket" / "here", b"x")
+    exiting_store(tmp_path, 9).delete("here")
+    assert not (tmp_path / "bucket" / "here").exists()
+    with pytest.raises(StoreError, match="code 4"):
+        exiting_store(tmp_path, 4).upload(write(tmp_path / "a.bin", b"x"), "k")
+
+
+def test_a_download_that_exits_cleanly_but_writes_nothing_is_a_missing_object(tmp_path):
+    store = exiting_store(tmp_path, 4)
+    local = write(tmp_path / "out" / "m.json", b"stale")
+    with pytest.raises(FileNotFoundError):
+        store.download("k", local)
+    assert not local.exists()
+    assert fetch_latest(store, tmp_path / "fresh") is None
 
 
 def make_checkpoint(directory, step, size=1000):

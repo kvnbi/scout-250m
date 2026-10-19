@@ -63,7 +63,7 @@ class CommandStore:
             raise StoreError(f"{argv[0]} is not installed") from error
         except subprocess.TimeoutExpired as error:
             raise StoreError(f"{name} timed out after {self.timeout} seconds") from error
-        if result.returncode and not (name == "download" and result.returncode in self.missing_codes):
+        if result.returncode and not (name != "upload" and result.returncode in self.missing_codes):
             raise StoreError(f"{name} failed with code {result.returncode}: {result.stderr.strip()}")
         return result.returncode
 
@@ -72,11 +72,27 @@ class CommandStore:
 
     def download(self, key: str, local: Path) -> None:
         local.parent.mkdir(parents=True, exist_ok=True)
-        if self._run("download", local=str(local), key=key):
+        local.unlink(missing_ok=True)
+        if self._run("download", local=str(local), key=key) or not local.exists():
             raise FileNotFoundError(key)
 
     def delete(self, key: str) -> None:
         self._run("delete", key=key)
+
+
+def rclone_store(remote: str, flags: Sequence[str] = (), timeout: float | None = None) -> CommandStore:
+    def literal(text: str) -> str:
+        return text.replace("{", "{{").replace("}", "}}")
+
+    base = literal(remote.rstrip("/"))
+    extra = [literal(flag) for flag in flags]
+    return CommandStore(
+        upload=["rclone", *extra, "copyto", "{local}", f"{base}/{{key}}"],
+        download=["rclone", *extra, "copyto", f"{base}/{{key}}", "{local}"],
+        delete=["rclone", *extra, "deletefile", f"{base}/{{key}}"],
+        missing_codes=(3, 4),
+        timeout=timeout,
+    )
 
 
 def _retry(action: Callable[[], object], retries: int, wait: float, sleep: Callable[[float], None]) -> object:
