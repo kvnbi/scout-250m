@@ -134,6 +134,19 @@ def build_passages(article: Article, max_words: int = MAX_WORDS, min_words: int 
             number += 1
 
 
+def encode_passage(passage: Passage) -> str:
+    return json.dumps(asdict(passage), ensure_ascii=False) + "\n"
+
+
+def decode_passage(line: str) -> Passage:
+    record = json.loads(line)
+    if not isinstance(record, dict) or set(record) != set(FIELDS):
+        raise ValueError("not a passage")
+    if not all(isinstance(record[name], str) for name in FIELDS):
+        raise ValueError("not a passage")
+    return Passage(**record)
+
+
 def write_passages(path: Path, passages: Iterable[Passage]) -> int:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -141,7 +154,7 @@ def write_passages(path: Path, passages: Iterable[Passage]) -> int:
     count = 0
     with open(partial, "w", encoding="utf-8") as stream:
         for passage in passages:
-            stream.write(json.dumps(asdict(passage), ensure_ascii=False) + "\n")
+            stream.write(encode_passage(passage))
             count += 1
     os.replace(partial, path)
     return count
@@ -151,9 +164,6 @@ def iter_passages(path: Path) -> Iterator[Passage]:
     with open(path, encoding="utf-8") as stream:
         for number, line in enumerate(stream, start=1):
             try:
-                record = json.loads(line)
-                if set(record) != set(FIELDS) or not all(isinstance(record[name], str) for name in FIELDS):
-                    raise ValueError
+                yield decode_passage(line)
             except ValueError:
                 raise ValueError(f"{path} line {number} is not a passage") from None
-            yield Passage(**record)
