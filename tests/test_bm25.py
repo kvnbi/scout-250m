@@ -240,7 +240,7 @@ def test_metadata_describes_the_index(tmp_path):
 def test_arrays_are_memory_mapped_and_read_only(tmp_path):
     build_index([passage(0, "alpha")], tmp_path / "idx")
     index = BM25Index(tmp_path / "idx")
-    for array in (index._offsets, index._doc_ids, index._impacts, index._starts):
+    for array in (index._offsets, index._doc_ids, index._impacts, index.store._starts):
         assert isinstance(array, np.memmap)
         with pytest.raises(ValueError):
             array[0] = 0

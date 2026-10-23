@@ -11,8 +11,9 @@ from pathlib import Path
 
 import numpy as np
 
-from scout.retrieval.passages import Passage, decode_passage, encode_passage
+from scout.retrieval.passages import Passage
 from scout.retrieval.search import Hit
+from scout.retrieval.store import PassageStore, PassageWriter, write_starts
 
 FORMAT = 1
 K1 = 0.9
@@ -58,8 +59,6 @@ def build_index(
     chunks: list[tuple[np.ndarray, np.ndarray, np.ndarray]] = []
     pending: tuple[list[int], list[int], list[int]] = ([], [], [])
     lengths: list[int] = []
-    starts: list[int] = []
-    position = 0
 
     def flush() -> None:
         if pending[0]:
@@ -73,12 +72,10 @@ def build_index(
             for column in pending:
                 column.clear()
 
-    with open(staging / "passages.jsonl", "wb") as store:
+    writer = PassageWriter(staging)
+    try:
         for number, passage in enumerate(passages):
-            line = encode_passage(passage).encode("utf-8")
-            starts.append(position)
-            store.write(line)
-            position += len(line)
+            writer.write(passage)
             counts = Counter(tokenize(_document_text(passage, include_title)))
             lengths.append(sum(counts.values()))
             for term, frequency in counts.items():
@@ -87,7 +84,10 @@ def build_index(
                 pending[2].append(min(frequency, MAX_FREQUENCY))
             if (number + 1) % chunk_documents == 0:
                 flush()
+    finally:
+        writer.close()
     flush()
+    write_starts(staging)
     documents = len(lengths)
     if documents == 0:
         shutil.rmtree(staging)
@@ -114,7 +114,6 @@ def build_index(
     np.save(staging / "offsets.npy", offsets)
     np.save(staging / "doc_ids.npy", docs)
     np.save(staging / "impacts.npy", impacts)
-    np.save(staging / "starts.npy", np.array(starts, dtype=np.int64))
     (staging / "terms.txt").write_text("\n".join(vocabulary), encoding="utf-8")
     meta = {
         "format": FORMAT,
@@ -144,14 +143,10 @@ class BM25Index:
         self._offsets = np.load(self.directory / "offsets.npy", mmap_mode="r")
         self._doc_ids = np.load(self.directory / "doc_ids.npy", mmap_mode="r")
         self._impacts = np.load(self.directory / "impacts.npy", mmap_mode="r")
-        self._starts = np.load(self.directory / "starts.npy", mmap_mode="r")
+        self.store = PassageStore(self.directory)
 
     def passage(self, document: int) -> Passage:
-        if not 0 <= document < self.documents:
-            raise IndexError(document)
-        with open(self.directory / "passages.jsonl", "rb") as store:
-            store.seek(int(self._starts[document]))
-            return decode_passage(store.readline().decode("utf-8"))
+        return self.store.passage(document)
 
     def scores(self, query: str) -> np.ndarray:
         scores = np.zeros(self.documents, dtype=np.float32)

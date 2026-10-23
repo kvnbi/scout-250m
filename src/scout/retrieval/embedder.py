@@ -26,6 +26,7 @@ class Embedder:
         if not 3 <= max_length <= self.model.config.max_position_embeddings:
             raise ValueError(f"max_length must be between 3 and {self.model.config.max_position_embeddings}")
         self.tokenizer = Tokenizer.from_file(str(directory / "tokenizer.json"))
+        self.max_length = max_length
         self.tokenizer.enable_truncation(max_length=max_length)
         self.pad = self.tokenizer.token_to_id("[PAD]")
         self.device = torch.device(device)
