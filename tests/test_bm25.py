@@ -233,6 +233,7 @@ def test_metadata_describes_the_index(tmp_path):
         "b": 0.6,
         "include_title": False,
         "average_length": 2.5,
+        "passages_bytes": (tmp_path / "idx" / "passages.jsonl").stat().st_size,
     }
     assert (tmp_path / "idx" / "terms.txt").read_text().split("\n") == ["alpha", "beta", "gamma"]
 
@@ -294,3 +295,100 @@ def test_the_index_honours_the_backend_contract(tmp_path):
     index = BM25Index(tmp_path / "idx", name="wikipedia-2018-bm25")
     assert isinstance(index, SearchBackend) and index.name == "wikipedia-2018-bm25"
     check_backend(index, ["w0", "w1 w2 w3", "unknown words only", "w5 " * 20], k=7)
+
+
+def copy_with(tmp_path, name, change):
+    import shutil
+
+    if not (tmp_path / "good").exists():
+        build_index([passage(i, f"alpha beta number{i}") for i in range(12)], tmp_path / "good")
+    shutil.copytree(tmp_path / "good", tmp_path / name)
+    change(tmp_path / name)
+    return tmp_path / name
+
+
+def cut(file, keep):
+    return lambda folder: (folder / file).write_bytes((folder / file).read_bytes()[:keep])
+
+
+def edit_meta(**changes):
+    def change(folder):
+        meta = json.loads((folder / "meta.json").read_text())
+        meta.update(changes)
+        (folder / "meta.json").write_text(json.dumps(meta))
+
+    return change
+
+
+@pytest.mark.parametrize(
+    "file, keep",
+    [("impacts.npy", 150), ("doc_ids.npy", 150), ("offsets.npy", 150), ("starts.npy", 140), ("passages.jsonl", 500), ("passages.jsonl", 0), ("terms.txt", 10)],
+)
+def test_a_truncated_file_is_refused_at_load_and_named(tmp_path, file, keep):
+    folder = copy_with(tmp_path, "bad", cut(file, keep))
+    with pytest.raises(ValueError, match=file.replace(".", r"\.")):
+        BM25Index(folder)
+
+
+@pytest.mark.parametrize("file", ["impacts.npy", "doc_ids.npy", "offsets.npy", "starts.npy"])
+def test_an_empty_array_file_is_refused_and_named(tmp_path, file):
+    with pytest.raises(ValueError, match=file.replace(".", r"\.")):
+        BM25Index(copy_with(tmp_path, "empty", cut(file, 0)))
+
+
+def resave(file, change):
+    import numpy
+
+    def apply(folder):
+        array = numpy.array(numpy.load(folder / file))
+        numpy.save(folder / file, change(array))
+
+    return apply
+
+
+@pytest.mark.parametrize(
+    "file, change, message",
+    [
+        ("offsets.npy", lambda a: a[:-1], "offsets.npy"),
+        ("offsets.npy", lambda a: a.__setitem__(-1, a[-1] - 1) or a, "offsets.npy"),
+        ("doc_ids.npy", lambda a: a[:-1], "doc_ids.npy"),
+        ("impacts.npy", lambda a: a[:-1], "impacts.npy"),
+        ("starts.npy", lambda a: a[:-1], "starts.npy"),
+    ],
+)
+def test_well_formed_arrays_that_disagree_with_the_metadata_are_refused(tmp_path, file, change, message):
+    with pytest.raises(ValueError, match=message.replace(".", r"\.")):
+        BM25Index(copy_with(tmp_path, "wrong", resave(file, change)))
+
+
+def test_extra_bytes_and_wrong_counts_are_refused(tmp_path):
+    def append(folder):
+        with open(folder / "passages.jsonl", "ab") as stream:
+            stream.write(b"{}\n")
+
+    with pytest.raises(ValueError, match="bytes, expected"):
+        BM25Index(copy_with(tmp_path, "extra", append))
+    for name, change in (("docs", edit_meta(documents=13)), ("postings", edit_meta(postings=99)), ("terms", edit_meta(terms=5))):
+        with pytest.raises(ValueError):
+            BM25Index(copy_with(tmp_path, name, change))
+
+
+def test_an_index_built_before_sizes_were_recorded_still_loads_and_still_catches_cuts(tmp_path):
+    def drop_size(folder):
+        edit_meta()(folder)
+        meta = json.loads((folder / "meta.json").read_text())
+        del meta["passages_bytes"]
+        (folder / "meta.json").write_text(json.dumps(meta))
+
+    assert [h.passage.id for h in BM25Index(copy_with(tmp_path, "old", drop_size)).search("number3", 1)] == ["3:0"]
+    size = (tmp_path / "good" / "passages.jsonl").stat().st_size
+
+    def old_then_cut(keep):
+        return lambda folder: (drop_size(folder), cut("passages.jsonl", keep)(folder))
+
+    for keep in (size - 5, size - 1):
+        with pytest.raises(ValueError, match="passages.jsonl"):
+            BM25Index(copy_with(tmp_path, f"old-cut-{keep}", old_then_cut(keep)))
+    starts = __import__("numpy").load(tmp_path / "good" / "starts.npy")
+    with pytest.raises(ValueError, match="ends before its last passage"):
+        BM25Index(copy_with(tmp_path, "old-line", old_then_cut(int(starts[-1]))))

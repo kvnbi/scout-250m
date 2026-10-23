@@ -122,13 +122,14 @@ def build_dense_index(
         commit()
     finally:
         writer.close()
+    passages_bytes = writer.position
     if done == 0:
         shutil.rmtree(staging)
         raise ValueError("there are no passages to index")
     if write_starts(staging) != done:
         raise ValueError("the passage store and the vectors disagree about the number of passages")
     description = {"text": "quoted title, newline, text", "prefix": "passage: "}
-    meta = {"format": FORMAT, "passages": done, **settings, **description}
+    meta = {"format": FORMAT, "passages": done, **settings, **description, "passages_bytes": passages_bytes}
     _write_json(staging / META, meta)
     (staging / PROGRESS).unlink()
     os.replace(staging, directory)
@@ -159,7 +160,12 @@ class DenseIndex:
             raise ValueError(f"embedder has {embedder.dimension} dimensions, index {self.meta['dimension']}")
         self.passages = int(self.meta["passages"])
         self.store = PassageStore(self.directory)
+        self.store.verify(self.passages, self.meta.get("passages_bytes"))
         shape = (self.passages, self.meta["dimension"])
+        expected = shape[0] * shape[1] * np.dtype(DTYPES[self.meta["dtype"]]).itemsize
+        actual = (self.directory / VECTORS).stat().st_size
+        if actual != expected:
+            raise ValueError(f"{self.directory / VECTORS} is {actual} bytes, expected {expected}, may be incomplete")
         self._vectors = np.memmap(self.directory / VECTORS, dtype=DTYPES[self.meta["dtype"]], mode="r", shape=shape)
         self._resident = torch.from_numpy(np.array(self._vectors)).to(self.device) if resident else None
 
@@ -206,6 +212,11 @@ def default_device() -> str:
     return "mps" if torch.backends.mps.is_available() else "cpu"
 
 
+def already_embedded(directory: Path) -> int:
+    record = Path(directory).with_name(Path(directory).name + ".part") / PROGRESS
+    return int(json.loads(record.read_text(encoding="utf-8"))["passages"]) if record.exists() else 0
+
+
 def count_lines(path: Path) -> int:
     count = 0
     with open(path, "rb") as stream:
@@ -229,10 +240,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     device = args.device or default_device()
     embed_dtype = args.embed_dtype or ("float32" if device == "cpu" else "float16")
     embedder = Embedder(args.model, device, getattr(torch, embed_dtype), args.max_length)
-    total, started = count_lines(args.passages), time.perf_counter()
+    total, resumed = count_lines(args.passages), already_embedded(args.out)
+    started = time.perf_counter()
 
     def report(done: int) -> None:
-        rate = done / (time.perf_counter() - started)
+        rate = (done - resumed) / (time.perf_counter() - started)
         left = (total - done) / rate / 60
         print(f"{done}/{total} passages, {rate:.0f} per second, {left:.1f} minutes left", flush=True)
 

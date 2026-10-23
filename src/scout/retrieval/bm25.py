@@ -15,7 +15,7 @@ import numpy as np
 
 from scout.retrieval.passages import Passage, iter_passages
 from scout.retrieval.search import Hit
-from scout.retrieval.store import PassageStore, PassageWriter, write_starts
+from scout.retrieval.store import PassageStore, PassageWriter, load_array, write_starts
 
 FORMAT = 1
 K1 = 0.9
@@ -88,6 +88,7 @@ def build_index(
                 flush()
     finally:
         writer.close()
+    passages_bytes = writer.position
     flush()
     write_starts(staging)
     documents = len(lengths)
@@ -126,6 +127,7 @@ def build_index(
         "b": b,
         "include_title": include_title,
         "average_length": average,
+        "passages_bytes": passages_bytes,
     }
     (staging / "meta.json").write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")
     os.replace(staging, directory)
@@ -142,10 +144,22 @@ class BM25Index:
         self.documents = int(self.meta["documents"])
         text = (self.directory / "terms.txt").read_text(encoding="utf-8")
         self._terms = {term: number for number, term in enumerate(text.split("\n")) if term}
-        self._offsets = np.load(self.directory / "offsets.npy", mmap_mode="r")
-        self._doc_ids = np.load(self.directory / "doc_ids.npy", mmap_mode="r")
-        self._impacts = np.load(self.directory / "impacts.npy", mmap_mode="r")
+        self._offsets = load_array(self.directory / "offsets.npy")
+        self._doc_ids = load_array(self.directory / "doc_ids.npy")
+        self._impacts = load_array(self.directory / "impacts.npy")
         self.store = PassageStore(self.directory)
+        self._verify()
+
+    def _verify(self) -> None:
+        meta, folder = self.meta, self.directory
+        if len(self._terms) != meta["terms"]:
+            raise ValueError(f"{folder / 'terms.txt'} lists {len(self._terms)} terms, expected {meta['terms']}")
+        if len(self._offsets) != meta["terms"] + 1 or int(self._offsets[-1]) != meta["postings"]:
+            raise ValueError(f"{folder / 'offsets.npy'} does not match the {meta['terms']} terms in the metadata")
+        for name, array in (("doc_ids.npy", self._doc_ids), ("impacts.npy", self._impacts)):
+            if len(array) != meta["postings"]:
+                raise ValueError(f"{folder / name} holds {len(array)} postings, expected {meta['postings']}")
+        self.store.verify(self.documents, meta.get("passages_bytes"))
 
     def passage(self, document: int) -> Passage:
         return self.store.passage(document)
@@ -171,7 +185,6 @@ class BM25Index:
             candidates = np.concatenate([above, tied[: k - len(above)]])
         ranked = candidates[np.lexsort((candidates, -scores[candidates]))]
         return [Hit(self.passage(int(document)), float(scores[document])) for document in ranked]
-
 
 
 def main(argv: Sequence[str] | None = None) -> int:

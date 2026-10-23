@@ -1,6 +1,7 @@
 import hashlib
 import json
 import types
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -8,7 +9,16 @@ import torch
 from bert_files import write_model_directory
 
 from scout.retrieval import dense as dense_module
-from scout.retrieval.dense import PROGRESS, DenseIndex, build_dense_index, count_lines, default_device, main, passage_text
+from scout.retrieval.dense import (
+    PROGRESS,
+    DenseIndex,
+    already_embedded,
+    build_dense_index,
+    count_lines,
+    default_device,
+    main,
+    passage_text,
+)
 from scout.retrieval.embedder import Embedder
 from scout.retrieval.passages import Passage, write_passages
 from scout.retrieval.search import SearchBackend, check_backend
@@ -57,6 +67,7 @@ def test_building_stores_vectors_passages_and_a_description(tmp_path):
     assert meta == {
         "format": 1, "passages": 40, "dimension": 16, "dtype": "float32", "model": "fake@1", "max_length": 256,
         "text": "quoted title, newline, text", "prefix": "passage: ",
+        "passages_bytes": (tmp_path / "idx" / "passages.jsonl").stat().st_size,
     }
     assert (tmp_path / "idx" / "vectors.bin").stat().st_size == 40 * 16 * 4
     assert sorted(f.name for f in (tmp_path / "idx").iterdir()) == ["meta.json", "passages.jsonl", "starts.npy", "vectors.bin"]
@@ -419,6 +430,37 @@ def test_progress_lines_show_the_rate_and_the_time_left(recorder, tmp_path, caps
     assert lines[1] == "3/3 passages, 0 per second, 0.0 minutes left"
 
 
+def test_a_resumed_run_reports_the_rate_of_the_new_work_only(recorder, tmp_path, capsys, monkeypatch):
+    out = str(tmp_path / "idx")
+    original = Recorder.encode
+    state = {"calls": 0}
+
+    def flaky(self, texts, kind="passage", batch_size=32):
+        state["calls"] += 1
+        if state["calls"] == 2:
+            raise RuntimeError("laptop went to sleep")
+        return original(self, texts, kind, batch_size)
+
+    monkeypatch.setattr(Recorder, "encode", flaky)
+    with pytest.raises(RuntimeError):
+        main(recorder + ["--out", out, "--chunk-passages", "2", "--device", "cpu"])
+    assert already_embedded(Path(out)) == 2
+    monkeypatch.setattr(Recorder, "encode", original)
+    capsys.readouterr()
+    ticks = iter([100.0, 100.5])
+    monkeypatch.setattr(dense_module, "time", types.SimpleNamespace(perf_counter=lambda: next(ticks)))
+    main(recorder + ["--out", out, "--chunk-passages", "2", "--device", "cpu"])
+    assert capsys.readouterr().out.splitlines()[0] == "3/3 passages, 2 per second, 0.0 minutes left"
+
+
+def test_nothing_is_counted_as_embedded_without_a_progress_record(tmp_path):
+    assert already_embedded(tmp_path / "idx") == 0
+    (tmp_path / "idx.part").mkdir()
+    assert already_embedded(tmp_path / "idx") == 0
+    (tmp_path / "idx.part" / PROGRESS).write_text(json.dumps({"passages": 123}))
+    assert already_embedded(tmp_path / "idx") == 123
+
+
 def test_command_line_options_choose_the_precisions(tmp_path):
     write_model_directory(tmp_path / "model")
     write_passages(tmp_path / "p.jsonl", corpus(3))
@@ -434,3 +476,59 @@ def test_command_line_refuses_bad_arguments(tmp_path, arguments):
     base = [str(tmp_path / "p.jsonl"), "--model", str(tmp_path), "--out", str(tmp_path / "o")]
     with pytest.raises(SystemExit):
         main(base + arguments if arguments else [])
+
+
+def dense_copy(tmp_path, name, change):
+    import shutil
+
+    if not (tmp_path / "good").exists():
+        build_dense_index(corpus(12), tmp_path / "good", Fake(), dtype="float32")
+    shutil.copytree(tmp_path / "good", tmp_path / name)
+    change(tmp_path / name)
+    return tmp_path / name
+
+
+@pytest.mark.parametrize("file, keep", [("vectors.bin", 500), ("vectors.bin", 0), ("starts.npy", 140), ("passages.jsonl", 400), ("passages.jsonl", 0)])
+def test_a_truncated_dense_file_is_refused_at_load_and_named(tmp_path, file, keep):
+    folder = dense_copy(tmp_path, "bad", lambda f: (f / file).write_bytes((f / file).read_bytes()[:keep]))
+    with pytest.raises(ValueError, match=file.replace(".", r"\.")):
+        DenseIndex(folder, Fake())
+
+
+def test_extra_bytes_and_wrong_counts_are_refused_by_a_dense_index(tmp_path):
+    def grow(name):
+        def change(folder):
+            with open(folder / name, "ab") as stream:
+                stream.write(b"\0" * 16 if name == "vectors.bin" else b"{}\n")
+
+        return change
+
+    for name in ("vectors.bin", "passages.jsonl"):
+        with pytest.raises(ValueError, match="bytes, expected"):
+            DenseIndex(dense_copy(tmp_path, f"extra-{name}", grow(name)), Fake())
+
+    def lie(folder):
+        meta = json.loads((folder / "meta.json").read_text())
+        meta["passages"] = 13
+        (folder / "meta.json").write_text(json.dumps(meta))
+
+    with pytest.raises(ValueError, match="lists 12 passages, expected 13"):
+        DenseIndex(dense_copy(tmp_path, "lie", lie), Fake())
+
+
+def test_a_dense_index_built_before_sizes_were_recorded_still_loads(tmp_path):
+    def drop_size(folder):
+        meta = json.loads((folder / "meta.json").read_text())
+        del meta["passages_bytes"]
+        (folder / "meta.json").write_text(json.dumps(meta))
+
+    index = DenseIndex(dense_copy(tmp_path, "old", drop_size), Fake())
+    assert len(index.search("x", 3)) == 3
+    size = (tmp_path / "good" / "passages.jsonl").stat().st_size
+
+    def cut_passages(folder):
+        drop_size(folder)
+        (folder / "passages.jsonl").write_bytes((folder / "passages.jsonl").read_bytes()[: size - 7])
+
+    with pytest.raises(ValueError, match="passages.jsonl"):
+        DenseIndex(dense_copy(tmp_path, "old-cut", cut_passages), Fake())

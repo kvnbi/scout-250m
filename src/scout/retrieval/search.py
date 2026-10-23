@@ -73,8 +73,9 @@ def domain(url: str) -> str:
 
 def render_hit(number: int, hit: Hit) -> str:
     passage = hit.passage
-    details = ", ".join(part for part in (domain(passage.url), passage.date) if part)
-    header = f"[{number}] {passage.title}" + (f" ({details})" if details else "")
+    title = " ".join(passage.title.split())
+    details = ", ".join(part for part in (domain(passage.url), " ".join(passage.date.split())) if part)
+    header = f"[{number}] {title}" + (f" ({details})" if details else "")
     return f"{header}\n{passage.text}"
 
 

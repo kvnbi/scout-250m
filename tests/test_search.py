@@ -173,3 +173,11 @@ def test_an_object_that_is_not_a_backend_is_a_type_error():
 def test_search_errors_are_runtime_errors_a_caller_can_tell_from_no_results():
     assert issubclass(SearchError, RuntimeError)
     assert not issubclass(SearchError, ValueError)
+
+
+def test_a_title_or_date_with_line_breaks_cannot_break_the_block_layout():
+    messy = Passage("1:0", "Two\nline\t title ", "", "Body.", "https://a.org/x", "2020-01-02\n")
+    assert render_hit(1, Hit(messy, 1.0)) == "[1] Two line title (a.org, 2020-01-02)\nBody."
+    blank_date = Passage("1:0", "T", "", "Body.", "https://a.org/x", " \n ")
+    assert render_hit(1, Hit(blank_date, 1.0)) == "[1] T (a.org)\nBody."
+    assert render_hit(1, Hit(Passage("1:0", "  \n ", "", "Body.", "", ""), 1.0)) == "[1] \nBody."

@@ -50,10 +50,31 @@ def write_starts(directory: Path) -> int:
     return len(begins)
 
 
+def load_array(path: Path) -> np.ndarray:
+    try:
+        return np.load(path, mmap_mode="r")
+    except (ValueError, EOFError) as error:
+        raise ValueError(f"{path} is truncated or damaged, the copy may be incomplete") from error
+
+
 class PassageStore:
     def __init__(self, directory: Path) -> None:
         self.directory = Path(directory)
-        self._starts = np.load(self.directory / STARTS, mmap_mode="r")
+        self._starts = load_array(self.directory / STARTS)
+
+    def verify(self, count: int, size: int | None = None) -> None:
+        path = self.directory / PASSAGES
+        actual = path.stat().st_size
+        if len(self) != count:
+            raise ValueError(f"{self.directory / STARTS} lists {len(self)} passages, expected {count}")
+        if size is not None and actual != size:
+            raise ValueError(f"{path} is {actual} bytes, expected {size}, the copy may be incomplete")
+        if count and int(self._starts[-1]) >= actual:
+            raise ValueError(f"{path} ends before its last passage, the copy may be incomplete")
+        with open(path, "rb") as stream:
+            stream.seek(max(actual - 1, 0))
+            if actual and stream.read(1) != b"\n":
+                raise ValueError(f"{path} does not end with a newline, the copy may be incomplete")
 
     def __len__(self) -> int:
         return len(self._starts)

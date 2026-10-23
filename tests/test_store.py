@@ -92,3 +92,45 @@ def test_the_starts_are_memory_mapped_and_read_only(tmp_path):
     assert isinstance(starts, np.memmap)
     with pytest.raises(ValueError):
         starts[0] = 5
+
+
+def test_a_damaged_array_is_reported_with_its_name_and_a_missing_one_is_not_hidden(tmp_path):
+    write_all(tmp_path, passages(3))
+    write_starts(tmp_path)
+    data = (tmp_path / "starts.npy").read_bytes()
+    (tmp_path / "starts.npy").write_bytes(data[:130])
+    with pytest.raises(ValueError, match=r"starts\.npy is truncated or damaged"):
+        PassageStore(tmp_path)
+    (tmp_path / "starts.npy").write_bytes(b"")
+    with pytest.raises(ValueError, match=r"starts\.npy is truncated or damaged"):
+        PassageStore(tmp_path)
+    (tmp_path / "starts.npy").unlink()
+    with pytest.raises(FileNotFoundError):
+        PassageStore(tmp_path)
+
+
+def test_a_store_verifies_its_count_its_size_and_its_ending(tmp_path):
+    write_all(tmp_path, passages(3))
+    write_starts(tmp_path)
+    store = PassageStore(tmp_path)
+    size = (tmp_path / PASSAGES).stat().st_size
+    store.verify(3)
+    store.verify(3, size)
+    with pytest.raises(ValueError, match="lists 3 passages, expected 4"):
+        store.verify(4)
+    for wrong in (size - 1, size + 1):
+        with pytest.raises(ValueError, match="bytes, expected"):
+            store.verify(3, wrong)
+    (tmp_path / PASSAGES).write_bytes((tmp_path / PASSAGES).read_bytes()[:-1])
+    with pytest.raises(ValueError, match="does not end with a newline"):
+        PassageStore(tmp_path).verify(3)
+    starts = np.load(tmp_path / "starts.npy")
+    (tmp_path / PASSAGES).write_bytes((tmp_path / PASSAGES).read_bytes()[: int(starts[-1])])
+    with pytest.raises(ValueError, match="ends before its last passage"):
+        PassageStore(tmp_path).verify(3)
+
+
+def test_an_empty_store_verifies(tmp_path):
+    (tmp_path / PASSAGES).write_bytes(b"")
+    write_starts(tmp_path)
+    PassageStore(tmp_path).verify(0, 0)
