@@ -1,17 +1,19 @@
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import re
 import shutil
+import sys
 import unicodedata
 from collections import Counter
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from pathlib import Path
 
 import numpy as np
 
-from scout.retrieval.passages import Passage
+from scout.retrieval.passages import Passage, iter_passages
 from scout.retrieval.search import Hit
 from scout.retrieval.store import PassageStore, PassageWriter, write_starts
 
@@ -170,3 +172,23 @@ class BM25Index:
         ranked = candidates[np.lexsort((candidates, -scores[candidates]))]
         return [Hit(self.passage(int(document)), float(scores[document])) for document in ranked]
 
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Build a BM25 index from a passages file.")
+    parser.add_argument("passages", type=Path, help="a passages.jsonl file")
+    parser.add_argument("--out", type=Path, required=True)
+    parser.add_argument("--k1", type=float, default=K1)
+    parser.add_argument("--b", type=float, default=B)
+    parser.add_argument("--no-title", action="store_true", help="do not index the title with the text")
+    args = parser.parse_args(argv)
+    try:
+        count = build_index(iter_passages(args.passages), args.out, args.k1, args.b, not args.no_title)
+    except ValueError as error:
+        parser.error(str(error))
+    print(f"{count} passages -> {args.out}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
